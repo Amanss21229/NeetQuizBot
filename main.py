@@ -600,19 +600,56 @@ Let's ace NEET together! 🚀
     
     async def donate_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /donate command"""
-        donate_text = """
-⭐ **Support NEET Quiz Bot** ⭐
+        user = update.effective_user
+        
+        # Create donation button
+        keyboard = [
+            [InlineKeyboardButton("💝 𝗗𝗢𝗡𝗔𝗧𝗘 𝗡𝗢𝗪 💝", url="https://t.me/DrQuizDonationBot")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        donate_text = f"""
+╔═════════════════════════════════════╗
+║  💝 𝗦𝗨𝗣𝗣𝗢𝗥𝗧 𝗢𝗨𝗥 𝗠𝗜𝗦𝗦𝗜𝗢𝗡 💝  ║
+╚═════════════════════════════════════╝
 
-Your support helps us maintain and improve this quiz bot for NEET aspirants! 
+🌟 Hey {user.first_name}! ✨
 
-💝 You can donate using Telegram Stars to keep this service running and add more features.
+🎯 **Your Support Makes Dreams Come True!**
 
-Thank you for supporting education! 🙏
+💡 Every donation helps thousands of NEET students:
+✅ Access FREE quality quiz questions daily
+✅ Improve their preparation with instant scoring  
+✅ Compete with peers in real-time leaderboards
+✅ Get closer to their MEDICAL COLLEGE dreams! 🏥
 
-_To donate, send Telegram Stars to this bot._
+🚀 **Why Your Support Matters:**
+🔥 Server hosting & maintenance costs
+⚡ Adding new features & improvements  
+📚 Creating more educational content
+🛡️ Ensuring 100% uptime for students
+
+💖 **We've Created Something Special For You:**
+
+🤖 **Secure Donation Bot:** @DrQuizDonationBot
+🔒 **100% Safe & Transparent** transactions
+🎁 **Special Recognition** for our supporters  
+📊 **Impact Reports** - See how you're helping students!
+
+════════════════════════════════════════
+
+🌈 **"Education is the most powerful weapon which you can use to change the world"** - Nelson Mandela
+
+💝 Your kindness today shapes a doctor's journey tomorrow!
+
+🙏 **Thank you for believing in education and our mission!**
         """
         
-        await update.message.reply_text(donate_text, parse_mode='Markdown')
+        await update.message.reply_text(
+            donate_text, 
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     
     async def developer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /developer command"""
