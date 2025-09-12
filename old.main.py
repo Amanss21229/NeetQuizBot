@@ -29,10 +29,6 @@ from telegram.ext import (
 )
 
 from models import db
-# Add these imports (put them near the top with other imports)
-from flask import Flask
-import threading
-
 
 # Bot configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -47,20 +43,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# ----------------- Render Flask keep-alive (ADD THIS) -----------------
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ NEET Quiz Bot is running!"
-
-def run_flask():
-    # Render sets PORT env var automatically; default 5000 for local testing
-    port = int(os.environ.get("PORT", 5000))
-    # Use host 0.0.0.0 so Render can bind
-    app.run(host="0.0.0.0", port=port)
-# --------------------------------------------------------------------
 
 # Security: Hide bot token from logs by reducing httpx and telegram logging level
 logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -1108,11 +1090,4 @@ async def main():
     await bot.run()
 
 if __name__ == "__main__":
-    # Start Flask in a daemon thread so Render detects an open port
-    threading.Thread(target=run_flask, daemon=True).start()
-
-    try:
-        # Run your existing bot (unchanged logic)
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped.")
+    asyncio.run(main())
