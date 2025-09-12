@@ -75,7 +75,7 @@ WRONG_MESSAGES = [
 class NEETQuizBot:
     def __init__(self):
         self.application = None
-        self.quiz_data = {}  # Store active quizzes: quiz_id -> quiz_info
+        self.quiz_data = {}  # Store active quizzes
         self.poll_mapping = {}  # Store poll_id -> {quiz_id, group_id, message_id}
     
     async def initialize(self):
@@ -232,7 +232,16 @@ Let's ace NEET together! 🚀
             return
         
         try:
-            import json
+            # Validate quiz data
+            if not poll.question or not poll.options:
+                logger.error("Invalid quiz: missing question or options")
+                return
+            
+            # Validate correct option ID
+            correct_option_id = poll.correct_option_id
+            if correct_option_id is None or correct_option_id < 0 or correct_option_id >= len(poll.options):
+                logger.error(f"Invalid correct_option_id: {correct_option_id} for {len(poll.options)} options")
+                return
             
             # Store quiz in database
             options = [option.text for option in poll.options]
@@ -240,19 +249,21 @@ Let's ace NEET together! 🚀
                 message_id=message.message_id,
                 from_group_id=chat.id,
                 quiz_text=poll.question,
-                correct_option=poll.correct_option_id,
+                correct_option=correct_option_id,
                 options=options
             )
             
             # Store quiz data for tracking
             self.quiz_data[quiz_id] = {
-                'correct_option': poll.correct_option_id,
+                'correct_option': correct_option_id,
                 'question': poll.question,
                 'options': options
             }
             
             # Send new non-anonymous polls to all active groups
             groups = await db.get_all_groups()
+            sent_count = 0
+            
             for group in groups:
                 if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
                     try:
@@ -262,7 +273,7 @@ Let's ace NEET together! 🚀
                             question=poll.question,
                             options=options,
                             type='quiz',
-                            correct_option_id=poll.correct_option_id,
+                            correct_option_id=correct_option_id,
                             is_anonymous=False,  # Critical: allows us to track user answers
                             explanation=poll.explanation if poll.explanation else None
                         )
@@ -274,12 +285,16 @@ Let's ace NEET together! 🚀
                             'message_id': sent_message.message_id
                         }
                         
-                        logger.info(f"Quiz sent to group {group['id']} with poll_id {sent_message.poll.id}")
+                        sent_count += 1
+                        logger.info(f"✅ Quiz sent to group {group['id']} with poll_id {sent_message.poll.id}")
                         
                     except Exception as e:
-                        logger.error(f"Failed to send quiz to group {group['id']}: {e}")
+                        logger.error(f"❌ Failed to send quiz to group {group['id']}: {e}")
             
-            logger.info(f"Quiz processed and sent to all groups: {poll.question}")
+            if sent_count > 0:
+                logger.info(f"🎯 Quiz '{poll.question[:50]}...' sent to {sent_count} groups successfully!")
+            else:
+                logger.warning("⚠️ Quiz not sent to any groups")
             
         except Exception as e:
             logger.error(f"Error handling quiz: {e}")
