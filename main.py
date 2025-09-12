@@ -125,6 +125,7 @@ class NEETQuizBot:
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
+        self.application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, self.handle_reply_to_poll))
         self.application.add_handler(PollAnswerHandler(self.handle_poll_answer))
         
         # Callback query handler
@@ -322,6 +323,90 @@ Let's ace NEET together! 🚀
             
         except Exception as e:
             logger.error(f"Error handling quiz: {e}")
+    
+    async def handle_reply_to_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle replies to poll messages in admin group to capture correct answers"""
+        message = update.message
+        chat = update.effective_chat
+        
+        # Only process replies in admin group
+        if chat.id != ADMIN_GROUP_ID:
+            return
+        
+        # Check if this is a reply to a poll message
+        reply_to_message = message.reply_to_message
+        if not reply_to_message or not reply_to_message.poll:
+            return
+        
+        # Parse the reply text for correct option (a, b, c, d)
+        reply_text = message.text.lower().strip()
+        
+        # Map text options to indices
+        option_mapping = {
+            'a': 0, '1': 0, 'option a': 0, 'a)': 0,
+            'b': 1, '2': 1, 'option b': 1, 'b)': 1,
+            'c': 2, '3': 2, 'option c': 2, 'c)': 2,
+            'd': 3, '4': 3, 'option d': 3, 'd)': 3,
+            'e': 4, '5': 4, 'option e': 4, 'e)': 4,
+        }
+        
+        correct_option_index = None
+        for text, index in option_mapping.items():
+            if text in reply_text:
+                correct_option_index = index
+                break
+        
+        if correct_option_index is None:
+            # Send help message
+            help_text = """
+❌ Invalid format! Please reply with correct option:
+
+✅ **Valid formats:**
+• `a` or `A` 
+• `b` or `B`
+• `c` or `C` 
+• `d` or `D`
+• `1`, `2`, `3`, `4`
+
+**Example:** Reply to quiz with just: `c`
+            """
+            await message.reply_text(help_text, parse_mode='Markdown')
+            return
+        
+        # Find the quiz in our stored data using the original poll message
+        poll_message_id = reply_to_message.message_id
+        quiz_id_to_update = None
+        
+        # Search through stored quiz data
+        for quiz_id, quiz_data in self.quiz_data.items():
+            # We need to find the quiz based on the message ID
+            # This is a simple approach - in a real system you'd want better tracking
+            if quiz_data['question'] == reply_to_message.poll.question:
+                quiz_id_to_update = quiz_id
+                break
+        
+        if quiz_id_to_update is None:
+            await message.reply_text("❌ Could not find the quiz to update. Please try again.")
+            return
+        
+        # Validate the option index against available options
+        poll_options_count = len(reply_to_message.poll.options)
+        if correct_option_index >= poll_options_count:
+            await message.reply_text(f"❌ Invalid option! This quiz only has options A-{chr(65 + poll_options_count - 1)}")
+            return
+        
+        # Update the stored quiz data with correct option
+        self.quiz_data[quiz_id_to_update]['correct_option'] = correct_option_index
+        
+        # Also update in database
+        await db.update_quiz_correct_option(quiz_id_to_update, correct_option_index)
+        
+        # Send confirmation
+        option_letter = chr(65 + correct_option_index)  # Convert to A, B, C, D
+        confirmation_text = f"✅ **Correct Answer Updated!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n📊 This will be used for scoring in all groups!"
+        
+        await message.reply_text(confirmation_text, parse_mode='Markdown')
+        logger.info(f"🔧 Admin updated quiz {quiz_id_to_update} correct answer to option {correct_option_index} ({option_letter})")
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz answers"""

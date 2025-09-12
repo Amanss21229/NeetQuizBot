@@ -188,6 +188,16 @@ class Database:
             """, message_id, from_group_id, quiz_text, correct_option, json.dumps(options))
             return quiz_id
     
+    async def update_quiz_correct_option(self, quiz_id: int, correct_option: int):
+        """Update correct option for an existing quiz"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE quizzes SET correct_option = $2, updated_at = NOW()
+                WHERE id = $1
+            """, quiz_id, correct_option)
+    
     async def record_quiz_answer(self, user_id: int, group_id: int, quiz_id: int, selected_option: int, points: int):
         """Record user's quiz answer"""
         if not self.pool:
