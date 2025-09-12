@@ -44,6 +44,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Security: Hide bot token from logs by reducing httpx and telegram logging level
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('telegram').setLevel(logging.WARNING)
+
 # Congratulatory messages for correct answers
 CORRECT_MESSAGES = [
     "🔥 You rocked it! +4 points!",
@@ -253,20 +257,58 @@ Let's ace NEET together! 🚀
             logger.info(f"  - correct_option_id from poll: {correct_option_id}")
             logger.info(f"  - Poll allows_multiple_answers: {poll.allows_multiple_answers}")
             
-            # Handle missing correct_option_id (Telegram API limitation)
+            # Handle missing correct_option_id (Telegram API limitation) 
+            # Do NOT auto-forward quiz without admin setting correct answer
             if correct_option_id is None:
-                # Due to Telegram Bot API limitations, correct_option_id might be None
-                # even for quiz types. We'll default to first option.
-                correct_option_id = 0
-                logger.info(f"⚠️ correct_option_id is None for {poll_type}. Using default: 0 (first option)")
-                logger.info("💡 Tip: The actual correct answer in admin group may be different!")
-                logger.info("🔧 Consider manually verifying the correct option in forwarded groups.")
+                logger.info(f"⚠️ Quiz received without correct_option_id. Waiting for admin to set correct answer.")
+                
+                # Store quiz in database with placeholder correct_option (-1 means unset)
+                options = [option.text for option in poll.options]
+                quiz_id = await db.add_quiz(
+                    message_id=message.message_id,
+                    from_group_id=chat.id,
+                    quiz_text=poll.question,
+                    correct_option=-1,  # -1 indicates no correct answer set yet
+                    options=options
+                )
+                
+                # Store quiz data for tracking (without correct_option initially)
+                self.quiz_data[quiz_id] = {
+                    'correct_option': -1,  # Will be updated when admin replies
+                    'question': poll.question,
+                    'options': options,
+                    'message_id': message.message_id,  # Store for reply matching
+                    'poll_object': poll  # Store full poll for later forwarding
+                }
+                
+                # Send instruction message to admin
+                instruction_text = f"""
+📝 **Quiz Received!**
+
+🎯 Question: {poll.question[:100]}{'...' if len(poll.question) > 100 else ''}
+
+⏳ **Please reply to the quiz with correct option:**
+• Type: `a`, `b`, `c`, `d` or `1`, `2`, `3`, `4`
+• Example: Just reply with `c`
+
+⏰ **Quiz will be forwarded to groups 30 seconds after you set the correct answer.**
+                """
+                
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=instruction_text,
+                    parse_mode='Markdown'
+                )
+                
+                logger.info(f"📋 Quiz {quiz_id} waiting for admin to set correct answer")
+                return  # Don't forward yet
             
             if correct_option_id < 0 or correct_option_id >= len(poll.options):
                 logger.error(f"Invalid correct_option_id: {correct_option_id} for {len(poll.options)} options")
                 return
             
-            logger.info(f"Final correct_option_id: {correct_option_id}")
+            # This part only runs for quizzes that already have correct_option_id set
+            logger.info(f"✅ Quiz has correct_option_id: {correct_option_id}")
             
             # Store quiz in database
             options = [option.text for option in poll.options]
@@ -282,12 +324,59 @@ Let's ace NEET together! 🚀
             self.quiz_data[quiz_id] = {
                 'correct_option': correct_option_id,
                 'question': poll.question,
-                'options': options
+                'options': options,
+                'message_id': message.message_id,
+                'poll_object': poll
             }
             
-            # Send new non-anonymous polls to all active groups
+            # Schedule delayed forwarding (30 seconds)
+            await self._schedule_quiz_forwarding(quiz_id, context)
+            
+            logger.info(f"⏰ Quiz {quiz_id} scheduled for forwarding in 30 seconds")
+            
+        except Exception as e:
+            logger.error(f"Error handling quiz: {e}")
+    
+    async def _schedule_quiz_forwarding(self, quiz_id: int, context: ContextTypes.DEFAULT_TYPE):
+        """Schedule quiz forwarding after 30 second delay"""
+        self.application.job_queue.run_once(
+            callback=self._forward_quiz_to_groups,
+            when=30,  # 30 seconds delay
+            name=f"forward_quiz_{quiz_id}",
+            data={'quiz_id': quiz_id}
+        )
+        logger.info(f"⏰ Quiz {quiz_id} scheduled for forwarding in 30 seconds")
+    
+    async def _forward_quiz_to_groups(self, context: ContextTypes.DEFAULT_TYPE):
+        """Forward quiz to all groups"""
+        try:
+            # Get quiz_id from job data
+            quiz_id = context.job.data['quiz_id']
+            
+            if quiz_id not in self.quiz_data:
+                logger.error(f"Quiz {quiz_id} not found in quiz_data for forwarding")
+                return
+            
+            quiz_data = self.quiz_data[quiz_id]
+            correct_option = quiz_data['correct_option']
+            
+            # Check if correct answer has been set
+            if correct_option == -1:
+                logger.warning(f"Quiz {quiz_id} still has no correct answer set. Skipping forwarding.")
+                # Send reminder to admin
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text="⚠️ Quiz not forwarded - Please set correct answer by replying to the quiz!",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Get all active groups
             groups = await db.get_all_groups()
             sent_count = 0
+            
+            poll = quiz_data['poll_object']
+            options = quiz_data['options']
             
             for group in groups:
                 if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
@@ -298,7 +387,7 @@ Let's ace NEET together! 🚀
                             question=poll.question,
                             options=options,
                             type='quiz',  # Always send as quiz for answer tracking
-                            correct_option_id=correct_option_id,
+                            correct_option_id=correct_option,
                             is_anonymous=False,  # Critical: allows us to track user answers
                             explanation=poll.explanation if poll.explanation else "📚 NEET Quiz Bot"
                         )
@@ -317,12 +406,30 @@ Let's ace NEET together! 🚀
                         logger.error(f"❌ Failed to send quiz to group {group['id']}: {e}")
             
             if sent_count > 0:
+                # Send confirmation to admin
+                option_letter = chr(65 + correct_option)  # Convert to A, B, C, D
+                confirmation = f"🎯 **Quiz Forwarded Successfully!**\n\n📊 Sent to {sent_count} groups\n✅ Correct Answer: **{option_letter}**"
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=confirmation,
+                    parse_mode='Markdown'
+                )
                 logger.info(f"🎯 Quiz '{poll.question[:50]}...' sent to {sent_count} groups successfully!")
             else:
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text="⚠️ Quiz not sent to any groups - No active groups found!",
+                    parse_mode='Markdown'
+                )
                 logger.warning("⚠️ Quiz not sent to any groups")
-            
+        
         except Exception as e:
-            logger.error(f"Error handling quiz: {e}")
+            logger.error(f"Error forwarding quiz {quiz_id}: {e}")
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=f"❌ Error forwarding quiz: {e}",
+                parse_mode='Markdown'
+            )
     
     async def handle_reply_to_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle replies to poll messages in admin group to capture correct answers"""
@@ -373,15 +480,14 @@ Let's ace NEET together! 🚀
             await message.reply_text(help_text, parse_mode='Markdown')
             return
         
-        # Find the quiz in our stored data using the original poll message
+        # Find the quiz in our stored data using message_id
         poll_message_id = reply_to_message.message_id
         quiz_id_to_update = None
         
-        # Search through stored quiz data
+        # Search through stored quiz data using message_id for better matching
         for quiz_id, quiz_data in self.quiz_data.items():
-            # We need to find the quiz based on the message ID
-            # This is a simple approach - in a real system you'd want better tracking
-            if quiz_data['question'] == reply_to_message.poll.question:
+            # Match by message_id for precise identification
+            if quiz_data.get('message_id') == poll_message_id:
                 quiz_id_to_update = quiz_id
                 break
         
@@ -403,10 +509,13 @@ Let's ace NEET together! 🚀
         
         # Send confirmation
         option_letter = chr(65 + correct_option_index)  # Convert to A, B, C, D
-        confirmation_text = f"✅ **Correct Answer Updated!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n📊 This will be used for scoring in all groups!"
+        confirmation_text = f"✅ **Correct Answer Set!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n⏰ **Quiz will be forwarded to all groups in 30 seconds!**"
         
         await message.reply_text(confirmation_text, parse_mode='Markdown')
         logger.info(f"🔧 Admin updated quiz {quiz_id_to_update} correct answer to option {correct_option_index} ({option_letter})")
+        
+        # Schedule forwarding after 30 seconds
+        await self._schedule_quiz_forwarding(quiz_id_to_update, context)
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz answers"""
