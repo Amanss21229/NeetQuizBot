@@ -281,6 +281,9 @@ Let's ace NEET together! 🚀
                     'poll_object': poll  # Store full poll for later forwarding
                 }
                 
+                logger.info(f"🔍 DEBUG: Stored quiz {quiz_id} with message_id: {message.message_id}")
+                logger.info(f"🔍 DEBUG: Current quiz_data keys: {list(self.quiz_data.keys())}")
+                
                 # Send instruction message to admin
                 instruction_text = f"""
 📝 **Quiz Received!**
@@ -483,6 +486,14 @@ Let's ace NEET together! 🚀
         # Find the quiz in our stored data using message_id
         poll_message_id = reply_to_message.message_id
         quiz_id_to_update = None
+        
+        logger.info(f"🔍 DEBUG: Looking for quiz with message_id: {poll_message_id}")
+        logger.info(f"🔍 DEBUG: Available quiz_data: {list(self.quiz_data.keys())}")
+        
+        # Debug: Print all stored message_ids
+        for quiz_id, quiz_data in self.quiz_data.items():
+            stored_msg_id = quiz_data.get('message_id')
+            logger.info(f"🔍 DEBUG: Quiz {quiz_id} has message_id: {stored_msg_id}")
         
         # Search through stored quiz data using message_id for better matching
         for quiz_id, quiz_data in self.quiz_data.items():
