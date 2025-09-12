@@ -194,7 +194,7 @@ class Database:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                UPDATE quizzes SET correct_option = $2, updated_at = NOW()
+                UPDATE quizzes SET correct_option = $2
                 WHERE id = $1
             """, quiz_id, correct_option)
     
