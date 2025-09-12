@@ -384,20 +384,46 @@ _To donate, send Telegram Stars to this bot._
         user = update.effective_user
         
         keyboard = [
-            [InlineKeyboardButton("💬 Meet With Aman", url="https://t.me/thegodoftgbot")]
+            [InlineKeyboardButton("💬 Meet With Aman", url="https://t.me/thegodoftgbot")],
+            [InlineKeyboardButton("🌟 Follow Updates", url="https://t.me/DrQuizBotUpdates")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         developer_text = f"""
-👋 Hello {user.first_name}! Meet the Developer ✨
+╔═══════════════════════════════════╗
+║   🚀 **𝗠𝗘𝗘𝗧 𝗧𝗛𝗘 𝗗𝗘𝗩𝗘𝗟𝗢𝗣𝗘𝗥** 🚀   ║
+╚═══════════════════════════════════╝
 
-Aman is the Founder of the company **Sᴀɴ‌sᴀ Fᴇᴇʟ**. 
+👋 **Namaste {user.first_name}!** ✨
 
-He is working on many projects and also the owner of this quiz bot.  
+🎯 **Meet Aman Singh** - The visionary behind your NEET success! 
 
-Do you want to meet with Aman?  
+⚡ **Who is Aman?**
+🏢 **Founder & CEO** of **『Sᴀɴsᴀ Fᴇᴇʟ』**
+🎓 **NEET Expert** with 5+ years experience  
+💻 **Tech Innovator** building educational solutions
+🏆 **Mentor** to 10,000+ NEET aspirants
 
-Click the button below to meet him directly, privately & securely.
+🌟 **What Makes Him Special?**
+✅ Created this FREE quiz bot for students like you
+✅ Personally reviews every feature for student benefit  
+✅ Available for 1-on-1 guidance & career counseling
+✅ Passionate about making NEET preparation affordable
+
+💰 **Free Consultation Available!**
+🎯 NEET Strategy Planning
+📚 Study Schedule Optimization  
+🏥 College Selection Guidance
+💪 Motivation & Mental Health Support
+
+🔥 **Why Connect with Aman?**
+• Get insider tips from a NEET expert
+• Learn advanced problem-solving techniques  
+• Understand college admission strategies
+• Receive personalized study guidance
+
+═══════════════════════════════════
+**🎯 Ready to boost your NEET score? Let's connect!**
         """
         
         await update.message.reply_text(

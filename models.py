@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import json
 import os
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Union
@@ -184,7 +185,7 @@ class Database:
                 INSERT INTO quizzes (message_id, from_group_id, quiz_text, correct_option, options)
                 VALUES ($1, $2, $3, $4, $5::jsonb)
                 RETURNING id
-            """, message_id, from_group_id, quiz_text, correct_option, options)
+            """, message_id, from_group_id, quiz_text, correct_option, json.dumps(options))
             return quiz_id
     
     async def record_quiz_answer(self, user_id: int, group_id: int, quiz_id: int, selected_option: int, points: int):
