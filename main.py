@@ -252,16 +252,14 @@ Let's ace NEET together! 🚀
             logger.info(f"  - correct_option_id from poll: {correct_option_id}")
             logger.info(f"  - Poll allows_multiple_answers: {poll.allows_multiple_answers}")
             
-            # Only default to 0 for regular polls, not quizzes
+            # Handle missing correct_option_id (Telegram API limitation)
             if correct_option_id is None:
-                if poll.type == 'quiz':
-                    logger.error(f"Quiz poll has no correct_option_id! This should not happen for quiz type.")
-                    # For now, let's skip this quiz as it's corrupted
-                    return
-                else:
-                    # For regular polls, use first option
-                    correct_option_id = 0
-                    logger.info(f"Using default correct_option_id: 0 for poll type: {poll_type}")
+                # Due to Telegram Bot API limitations, correct_option_id might be None
+                # even for quiz types. We'll default to first option.
+                correct_option_id = 0
+                logger.info(f"⚠️ correct_option_id is None for {poll_type}. Using default: 0 (first option)")
+                logger.info("💡 Tip: The actual correct answer in admin group may be different!")
+                logger.info("🔧 Consider manually verifying the correct option in forwarded groups.")
             
             if correct_option_id < 0 or correct_option_id >= len(poll.options):
                 logger.error(f"Invalid correct_option_id: {correct_option_id} for {len(poll.options)} options")
