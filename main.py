@@ -228,8 +228,12 @@ Let's ace NEET together! 🚀
         if chat.id != ADMIN_GROUP_ID:
             return
         
-        if not poll or poll.type != 'quiz':
+        # Accept both quiz and regular poll types, but prefer quiz
+        if not poll:
             return
+        
+        # For regular polls, we'll treat the first option as correct by default
+        poll_type = poll.type
         
         try:
             # Validate quiz data
@@ -237,9 +241,14 @@ Let's ace NEET together! 🚀
                 logger.error("Invalid quiz: missing question or options")
                 return
             
-            # Validate correct option ID
+            # Handle correct option ID - for regular polls, use 0 as default
             correct_option_id = poll.correct_option_id
-            if correct_option_id is None or correct_option_id < 0 or correct_option_id >= len(poll.options):
+            if correct_option_id is None:
+                # For regular polls or quizzes without correct answer, use first option
+                correct_option_id = 0
+                logger.info(f"Using default correct_option_id: 0 for poll type: {poll_type}")
+            
+            if correct_option_id < 0 or correct_option_id >= len(poll.options):
                 logger.error(f"Invalid correct_option_id: {correct_option_id} for {len(poll.options)} options")
                 return
             
@@ -272,10 +281,10 @@ Let's ace NEET together! 🚀
                             chat_id=group['id'],
                             question=poll.question,
                             options=options,
-                            type='quiz',
+                            type='quiz',  # Always send as quiz for answer tracking
                             correct_option_id=correct_option_id,
                             is_anonymous=False,  # Critical: allows us to track user answers
-                            explanation=poll.explanation if poll.explanation else None
+                            explanation=poll.explanation if poll.explanation else "📚 NEET Quiz Bot"
                         )
                         
                         # Store poll mapping for answer tracking
@@ -406,39 +415,27 @@ _To donate, send Telegram Stars to this bot._
         
         developer_text = f"""
 ╔═══════════════════════════════════╗
-║   🚀 **𝗠𝗘𝗘𝗧 𝗧𝗛𝗘 𝗗𝗘𝗩𝗘𝗟𝗢𝗣𝗘𝗥** 🚀   ║
+║   🚀 𝗠𝗘𝗘𝗧 𝗧𝗛𝗘 𝗗𝗘𝗩𝗘𝗟𝗢𝗣𝗘𝗥 🚀   ║
 ╚═══════════════════════════════════╝
 
-👋 **Namaste {user.first_name}!** ✨
+👋 Namaste 🇮🇳! ✨
 
-🎯 **Meet Aman Singh** - The visionary behind your NEET success! 
+🎯 Meet Aman - The visionary behind this NEET QUIZ BOT
 
-⚡ **Who is Aman?**
-🏢 **Founder & CEO** of **『Sᴀɴsᴀ Fᴇᴇʟ』**
-🎓 **NEET Expert** with 5+ years experience  
-💻 **Tech Innovator** building educational solutions
-🏆 **Mentor** to 10,000+ NEET aspirants
+⚡ Who is Aman?
+🏢 Founder & CEO of 『Sᴀɴsᴀ Fᴇᴇʟ』
+🎓 working On Different Projects. 
+💻 Tech Innovator building educational solutions
+🏆 very soon going to launch Neet Quiz App with multiple features.  
 
-🌟 **What Makes Him Special?**
+🌟 What Makes Him Special?
 ✅ Created this FREE quiz bot for students like you
 ✅ Personally reviews every feature for student benefit  
-✅ Available for 1-on-1 guidance & career counseling
+✅ Available for 1-on-1 chatting, to know the suggestions ideas and feedback 
 ✅ Passionate about making NEET preparation affordable
 
-💰 **Free Consultation Available!**
-🎯 NEET Strategy Planning
-📚 Study Schedule Optimization  
-🏥 College Selection Guidance
-💪 Motivation & Mental Health Support
-
-🔥 **Why Connect with Aman?**
-• Get insider tips from a NEET expert
-• Learn advanced problem-solving techniques  
-• Understand college admission strategies
-• Receive personalized study guidance
-
 ═══════════════════════════════════
-**🎯 Ready to boost your NEET score? Let's connect!**
+Let's connect with Aman Directly, privately and securely!
         """
         
         await update.message.reply_text(
