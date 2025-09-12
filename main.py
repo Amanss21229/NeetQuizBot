@@ -241,16 +241,33 @@ Let's ace NEET together! 🚀
                 logger.error("Invalid quiz: missing question or options")
                 return
             
-            # Handle correct option ID - for regular polls, use 0 as default
+            # Handle correct option ID with detailed debugging
             correct_option_id = poll.correct_option_id
+            
+            # Debug logging to understand what's happening
+            logger.info(f"Poll debug info:")
+            logger.info(f"  - Poll type: {poll.type}")
+            logger.info(f"  - Question: {poll.question[:50]}...")
+            logger.info(f"  - Options count: {len(poll.options)}")
+            logger.info(f"  - correct_option_id from poll: {correct_option_id}")
+            logger.info(f"  - Poll allows_multiple_answers: {poll.allows_multiple_answers}")
+            
+            # Only default to 0 for regular polls, not quizzes
             if correct_option_id is None:
-                # For regular polls or quizzes without correct answer, use first option
-                correct_option_id = 0
-                logger.info(f"Using default correct_option_id: 0 for poll type: {poll_type}")
+                if poll.type == 'quiz':
+                    logger.error(f"Quiz poll has no correct_option_id! This should not happen for quiz type.")
+                    # For now, let's skip this quiz as it's corrupted
+                    return
+                else:
+                    # For regular polls, use first option
+                    correct_option_id = 0
+                    logger.info(f"Using default correct_option_id: 0 for poll type: {poll_type}")
             
             if correct_option_id < 0 or correct_option_id >= len(poll.options):
                 logger.error(f"Invalid correct_option_id: {correct_option_id} for {len(poll.options)} options")
                 return
+            
+            logger.info(f"Final correct_option_id: {correct_option_id}")
             
             # Store quiz in database
             options = [option.text for option in poll.options]
