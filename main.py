@@ -119,6 +119,7 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("refresh", self.refresh_command))
         self.application.add_handler(CommandHandler("donate", self.donate_command))
         self.application.add_handler(CommandHandler("developer", self.developer_command))
+        self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
@@ -148,6 +149,7 @@ class NEETQuizBot:
             BotCommand("refresh", "Refresh the bot"),
             BotCommand("donate", "Support the bot"),
             BotCommand("developer", "Meet the developer"),
+            BotCommand("leaderboard", "Show group leaderboard"),
         ]
         
         admin_commands = [
@@ -280,9 +282,6 @@ Let's ace NEET together! 🚀
                     'message_id': message.message_id,  # Store for reply matching
                     'poll_object': poll  # Store full poll for later forwarding
                 }
-                
-                logger.info(f"🔍 DEBUG: Stored quiz {quiz_id} with message_id: {message.message_id}")
-                logger.info(f"🔍 DEBUG: Current quiz_data keys: {list(self.quiz_data.keys())}")
                 
                 # Send instruction message to admin
                 instruction_text = f"""
@@ -487,14 +486,6 @@ Let's ace NEET together! 🚀
         poll_message_id = reply_to_message.message_id
         quiz_id_to_update = None
         
-        logger.info(f"🔍 DEBUG: Looking for quiz with message_id: {poll_message_id}")
-        logger.info(f"🔍 DEBUG: Available quiz_data: {list(self.quiz_data.keys())}")
-        
-        # Debug: Print all stored message_ids
-        for quiz_id, quiz_data in self.quiz_data.items():
-            stored_msg_id = quiz_data.get('message_id')
-            logger.info(f"🔍 DEBUG: Quiz {quiz_id} has message_id: {stored_msg_id}")
-        
         # Search through stored quiz data using message_id for better matching
         for quiz_id, quiz_data in self.quiz_data.items():
             # Match by message_id for precise identification
@@ -663,6 +654,136 @@ Let's connect with Aman Directly, privately and securely!
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+    
+    async def leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /leaderboard command - show current group leaderboard"""
+        chat = update.effective_chat
+        
+        # Only works in groups
+        if chat.type == 'private':
+            await update.message.reply_text(
+                "🏆 **Group Leaderboard**\n\n"
+                "❌ This command only works in groups!\n"
+                "🔄 Please use this command in a group where the bot is active.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            # Get group leaderboard data
+            group_leaderboard = await db.get_group_leaderboard(chat.id)
+            
+            if not group_leaderboard:
+                no_data_text = """
+╔══════════════════════════════════╗
+║  🏆 **𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗** 🏆  ║
+╚══════════════════════════════════╝
+
+📊 **Current Status:** No quiz activity yet!
+
+🎯 **How to get on the leaderboard:**
+✅ Answer quiz questions sent by the bot
+✅ Earn points: +4 ✅ correct, -1 ❌ wrong, 0 ⭕ unattempted
+✅ Compete with other group members
+
+🚀 **Start answering quizzes to see your ranking!**
+                """
+                await update.message.reply_text(no_data_text, parse_mode='Markdown')
+                return
+            
+            # Build decorated leaderboard message
+            group_title = chat.title or "This Group"
+            leaderboard_text = f"""
+╔══════════════════════════════════╗
+║  🏆 **𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗** 🏆  ║
+╚══════════════════════════════════╝
+
+🏠 **Group:** {group_title}
+📅 **Updated:** {datetime.now(TIMEZONE).strftime('%d %b %Y, %I:%M %p')}
+⚡ **Total Players:** {len(group_leaderboard)}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+            
+            # Add top performers with special decorations
+            for i, user in enumerate(group_leaderboard[:20], 1):  # Show top 20
+                name = user.get('first_name') or user.get('username') or 'Unknown'
+                score = user['score']
+                correct = user['correct']
+                wrong = user['wrong'] 
+                unattempted = user['unattempted']
+                total_attempted = correct + wrong + unattempted
+                
+                # Rank emojis and decorations
+                if i == 1:
+                    rank_emoji = "🥇"
+                    decoration = "👑"
+                elif i == 2:
+                    rank_emoji = "🥈" 
+                    decoration = "⭐"
+                elif i == 3:
+                    rank_emoji = "🥉"
+                    decoration = "✨"
+                elif i <= 10:
+                    rank_emoji = f"🏅 **{i}**"
+                    decoration = "🔥"
+                else:
+                    rank_emoji = f"**{i}**"
+                    decoration = "💪"
+                
+                # Performance indicators
+                if score >= 100:
+                    performance = "🚀 Master"
+                elif score >= 50:
+                    performance = "⚡ Expert"
+                elif score >= 20:
+                    performance = "🎯 Pro"
+                elif score >= 10:
+                    performance = "📈 Rising"
+                else:
+                    performance = "🌱 Beginner"
+                
+                # Accuracy calculation
+                if total_attempted > 0:
+                    accuracy = round((correct / total_attempted) * 100, 1)
+                    if accuracy >= 80:
+                        accuracy_emoji = "🎯"
+                    elif accuracy >= 60:
+                        accuracy_emoji = "📊"
+                    else:
+                        accuracy_emoji = "📉"
+                else:
+                    accuracy = 0
+                    accuracy_emoji = "📊"
+                
+                leaderboard_text += f"""
+{rank_emoji} [{name}](tg://user?id={user['id']}) {decoration} {performance}
+
+    📊 **Total Score:** {score} points
+    🎯 **Questions:** {total_attempted} attempted
+    ✅ **Correct:** {correct} | ❌ **Wrong:** {wrong} | ⭕ **Skipped:** {unattempted}
+    {accuracy_emoji} **Accuracy:** {accuracy}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+            
+            # Add footer with motivational message
+            leaderboard_text += f"""
+
+🎯 **Keep practicing to climb higher!**
+💡 **Tip:** Answer more quizzes to improve your rank
+
+🏆 Use /leaderboard anytime to check your progress!
+            """
+            
+            await update.message.reply_text(leaderboard_text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in leaderboard command: {e}")
+            await update.message.reply_text(
+                "❌ Sorry, there was an error fetching the leaderboard. Please try again later.",
+                parse_mode='Markdown'
+            )
     
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /broadcast command (admin only)"""
