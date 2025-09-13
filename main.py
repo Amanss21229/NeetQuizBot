@@ -217,7 +217,7 @@ class NEETQuizBot:
         # Create inline keyboard
         keyboard = [
             [InlineKeyboardButton("➕ Add Me in Your Group", url=f"https://t.me/{context.bot.username}?startgroup=true")],
-            [InlineKeyboardButton("👤 Meet the Owner", url="https://t.me/thegodoftgbot")],
+            [InlineKeyboardButton("🧑🏻‍💼 Meet the Owner", url="https://t.me/thegodoftgbot")],
             [InlineKeyboardButton("📢 Join Our Community", url="https://t.me/DrQuizBotUpdates")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -607,7 +607,7 @@ Let's ace NEET together! 🚀
                 points=points
             )
             
-            # Send response message to the GROUP (not DM)
+            # Send response message to the GROUP (also DM)
             if message_type == "correct":
                 response = random.choice(CORRECT_MESSAGES)
                 await context.bot.send_message(
@@ -1011,7 +1011,7 @@ Let's connect with Aman Directly, privately and securely!
         logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
-        """Send daily leaderboards at 10:00 PM IST"""
+        """Send daily leaderboards at 04:30 PM IST"""
         try:
             groups = await db.get_all_groups()
             
