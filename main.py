@@ -468,92 +468,93 @@ Let's ace NEET together! 🚀
                 text=f"❌ Error forwarding quiz: {e}",
                 parse_mode='Markdown'
             )
-    
+
     async def handle_reply_to_poll(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle replies to poll messages in admin group to capture correct answers"""
-        message = update.message
-        chat = update.effective_chat
-        
-        # Only process replies in admin group
-        if chat.id != ADMIN_GROUP_ID:
-            return
-        
-        # Check if this is a reply to a poll message
-        reply_to_message = message.reply_to_message
-        if not reply_to_message or not reply_to_message.poll:
-            return
-        
-        # Parse the reply text for correct option (a, b, c, d)
-        reply_text = message.text.lower().strip()
-        
-        # Map text options to indices
-        option_mapping = {
-            'a': 0, '1': 0, 'option a': 0, 'a)': 0,
-            'b': 1, '2': 1, 'option b': 1, 'b)': 1,
-            'c': 2, '3': 2, 'option c': 2, 'c)': 2,
-            'd': 3, '4': 3, 'option d': 3, 'd)': 3,
-            'e': 4, '5': 4, 'option e': 4, 'e)': 4,
-        }
-        
-        correct_option_index = None
-        for text, index in option_mapping.items():
-            if text in reply_text:
-                correct_option_index = index
-                break
-        
-        if correct_option_index is None:
-            # Send help message
-            help_text = """
-❌ Invalid format! Please reply with correct option:
+    """Handle replies to poll messages in admin group to capture correct answers"""
+    message = update.message
+    chat = update.effective_chat
 
-✅ **Valid formats:**
-• `a` or `A` 
-• `b` or `B`
-• `c` or `C` 
-• `d` or `D`
-• `1`, `2`, `3`, `4`
+    # Only process replies in admin group
+    if chat.id != ADMIN_GROUP_ID:
+        return
 
-**Example:** Reply to quiz with just: `c`
-            """
-            await message.reply_text(help_text, parse_mode='Markdown')
-            return
-        
-        # Find the quiz in our stored data using message_id
-        poll_message_id = reply_to_message.message_id
-        quiz_id_to_update = None
-        
-        # Search through stored quiz data using message_id for better matching
-        for quiz_id, quiz_data in self.quiz_data.items():
-            # Match by message_id for precise identification
-            if quiz_data.get('message_id') == poll_message_id:
-                quiz_id_to_update = quiz_id
-                break
-        
-        if quiz_id_to_update is None:
-            await message.reply_text("❌ Could not find the quiz to update. Please try again.")
-            return
-        
-        # Validate the option index against available options
-        poll_options_count = len(reply_to_message.poll.options)
-        if correct_option_index >= poll_options_count:
-            await message.reply_text(f"❌ Invalid option! This quiz only has options A-{chr(65 + poll_options_count - 1)}")
-            return
-        
-        # Update the stored quiz data with correct option
-        self.quiz_data[quiz_id_to_update]['correct_option'] = correct_option_index
-        
-        # Also update in database
-        await db.update_quiz_correct_option(quiz_id_to_update, correct_option_index)
-        
-        # Send confirmation
-        option_letter = chr(65 + correct_option_index)  # Convert to A, B, C, D
-        confirmation_text = f"✅ **Correct Answer Set!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n⏰ **Quiz will be forwarded to all groups in 30 seconds!**"
-        
-        await message.reply_text(confirmation_text, parse_mode='Markdown')
-        logger.info(f"🔧 Admin updated quiz {quiz_id_to_update} correct answer to option {correct_option_index} ({option_letter})")
-        
-        # Schedule forwarding after 30 seconds
-        await self._schedule_quiz_forwarding(quiz_id_to_update, context)
+    # Check if this is a reply to a poll message
+    reply_to_message = message.reply_to_message
+    if not reply_to_message or not reply_to_message.poll:
+        return
+
+    reply_text = message.text.lower().strip()
+
+    option_mapping = {
+        'a': 0, '1': 0, 'option a': 0, 'a)': 0,
+        'b': 1, '2': 1, 'option b': 1, 'b)': 1,
+        'c': 2, '3': 2, 'option c': 2, 'c)': 2,
+        'd': 3, '4': 3, 'option d': 3, 'd)': 3,
+        'e': 4, '5': 4, 'option e': 4, 'e)': 4,
+    }
+
+    correct_option_index = None
+    for text, index in option_mapping.items():
+        if text in reply_text:
+            correct_option_index = index
+            break
+
+    if correct_option_index is None:
+        await message.reply_text(
+            "❌ Invalid format! Please reply with just `a`, `b`, `c`, `d` or `1, 2, 3, 4`",
+            parse_mode='Markdown'
+        )
+        return
+
+    # 🔑 Match quiz via message_id
+    poll_message_id = reply_to_message.message_id
+    quiz_id_to_update = None
+
+    # First check in in-memory quiz_data
+    for quiz_id, quiz_data in self.quiz_data.items():
+        if quiz_data.get('message_id') == poll_message_id:
+            quiz_id_to_update = quiz_id
+            break
+
+    # If not found in memory, try DB
+    if quiz_id_to_update is None:
+        quiz_from_db = await db.get_quiz_by_message_id(poll_message_id, ADMIN_GROUP_ID)
+        if quiz_from_db:
+            quiz_id_to_update = quiz_from_db['id']
+            # also sync back into memory
+            self.quiz_data[quiz_id_to_update] = {
+                'correct_option': -1,
+                'question': quiz_from_db['quiz_text'],
+                'options': quiz_from_db['options'],
+                'message_id': poll_message_id
+            }
+
+    if quiz_id_to_update is None:
+        await message.reply_text("❌ Could not find the quiz to update. Please try again.")
+        return
+
+    # Validate option index
+    poll_options_count = len(reply_to_message.poll.options)
+    if correct_option_index >= poll_options_count:
+        await message.reply_text(f"❌ Invalid option! This quiz only has options A-{chr(65 + poll_options_count - 1)}")
+        return
+
+    # Update memory + DB
+    self.quiz_data[quiz_id_to_update]['correct_option'] = correct_option_index
+    await db.update_quiz_correct_option(quiz_id_to_update, correct_option_index)
+
+    option_letter = chr(65 + correct_option_index)
+    confirmation_text = (
+        f"✅ **Correct Answer Set!**\n\n"
+        f"🎯 Quiz: {reply_to_message.poll.question[:50]}...\n"
+        f"✅ Correct Option: **{option_letter}**\n\n"
+        f"⏰ Quiz will be forwarded in 30 seconds!"
+    )
+    await message.reply_text(confirmation_text, parse_mode='Markdown')
+
+    # Schedule forwarding
+    await self._schedule_quiz_forwarding(quiz_id_to_update, context)
+
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz answers"""
