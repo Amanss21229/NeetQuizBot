@@ -1005,19 +1005,19 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text("❌ Error fetching admin list.")
 
     async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /grouplist command (admin only)"""
-    user = update.effective_user
-    
-    # ✅ Sirf admin ke liye
-    if not await db.is_admin(user.id):
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-
-    try:
-        groups = await db.get_all_groups()
-        if not groups:
-            await update.message.reply_text("🤷‍♂️ Bot is not in any groups yet.")
+        """Handle /grouplist command (admin only)"""
+        user = update.effective_user
+        
+        # ✅ Sirf admin ke liye
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
             return
+
+        try:
+            groups = await db.get_all_groups()
+            if not groups:
+                await update.message.reply_text("🤷‍♂️ Bot is not in any groups yet.")
+                return
 
         # Group list banani hai
         text = "📋 **Groups where bot is active:**\n\n"
@@ -1031,7 +1031,7 @@ Let's connect with Aman Directly, privately and securely!
                     text += f"{i}. [{chat.title}]({group_link}) — 👥 {members_count} members\n"
                 else:
                     text += f"{i}. {chat.title} — 👥 {members_count} members\n"
-
+            
             except Exception as e:
                 text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
                 continue
