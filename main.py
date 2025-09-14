@@ -1025,12 +1025,11 @@ Let's connect with Aman Directly, privately and securely!
                 try:
                     chat = await context.bot.get_chat(group['id'])  # Group ka naam
                     members_count = await context.bot.get_chat_member_count(group['id'])  # Members count
-                    group_link = f"https://t.me/{chat.username}" if chat.username else None
+                    group_link = f"https://t.me/c/{str(group['id'])[4:]}" if str(group['id']).startswith("-100") else None
 
                     if group_link:
-                        text += f"{i}. [{chat.title}]({group_link}) (@{chat.username}) — 👥 {members_count} members\n"
+                        text += f"{i}. [{chat.title}]({group_link}) — 👥 {members_count} members\n"
                     else:
-                        display_name = chat.title  # private groups without username
                         text += f"{i}. {chat.title} — 👥 {members_count} members\n"
             
                 except Exception as e:
