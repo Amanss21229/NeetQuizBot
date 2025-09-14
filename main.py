@@ -142,7 +142,7 @@ class NEETQuizBot:
         # Schedule daily leaderboards at 10:00 PM IST
         self.application.job_queue.run_daily(
             callback=self.send_daily_leaderboards,
-            time=datetime.strptime("22:00", "%H:%M").time(),
+            time=time(hour=22, minute=0, tzinfo=TIMEZONE),  # 10:00 PM IST
             name="daily_leaderboards"
         )
     
@@ -1051,7 +1051,7 @@ Let's connect with Aman Directly, privately and securely!
         logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
-        """Send daily leaderboards at 04:30 PM IST"""
+        """Send daily leaderboards at 10:00 PM IST"""
         try:
             groups = await db.get_all_groups()
             
