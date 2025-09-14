@@ -73,9 +73,9 @@ CORRECT_MESSAGES = [
     "🎉 Absolutely right! +4 points!",
     "😍 ohho ek dam shi jawaab! +4 points!",
     "✨ Brilliant answer! +4 points!",
-    "😇 waah bete tune to moj kardi, bikila shi jawaab! +4 points!",
-    "🚀 Outstanding! +4 points!",
-    "😚 lagta hai delhi aiims jaake hi maanoge, bilkul shi jawaab! +4 points!",
+    "😇 waah bete tune to moj kardi, bilkul shi jawaab! +4 points!",
+    "🚀 Outstanding! babua +4 points!",
+    "😚 lagta hai delhi aiims jaake hi maanoge beta, bilkul shi jawaab! +4 points!",
     "🏆 Perfect! +4 points!",
     "🔥 Tune to Aag lga di beta, bilkul shi answer! +4 points!",
     "⭐ Excellent work! +4 points!",
@@ -103,10 +103,10 @@ WRONG_MESSAGES = [
     "😪 chrome dekhna kam karo beta! -1 point",
     "😑 galat jawaab, extra class ke naam pe kha jaate the beta🤭! -1 point",
     "😌 wrong answer, BTW Tum to one shot waale ho na! -1 point",
-    "🙃 Galat jawaab, Or pinki ke chakkar me😆! -1 point",
-    "👀 jb laiki se dhyaan hatega tabhi to anser shi hoga☻️! -1 point",
+    "🙃 Galat jawaab, Or pinki pado ke chakkar me😆! -1 point",
+    "👀 jb laiki se dhyaan hatega tabhi to answer shi hoga☻️! -1 point",
     "😒 Galat jawaab, or karo babu sona🤧! -1 point",
-    "😶 wrong Answer, btw tum to whi ho na jo tg pe padhne aaye the or group owner se pyaar Kar baithe🤣! -1 point",
+    "😶 wrong Answer, btw tum to whi ho na jo tg pe padhne aaye the or study partner dhundne lage🤣! -1 point",
     "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
 ]
 
