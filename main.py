@@ -976,7 +976,7 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Remove admin error: {e}")
             await update.message.reply_text("❌ Error removing admin.")
 
-    async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+ async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /grouplist command (admin only)"""
     user = update.effective_user
     
@@ -1012,7 +1012,7 @@ Let's connect with Aman Directly, privately and securely!
 
     except Exception as e:
         await update.message.reply_text("❌ Error fetching group list.")
-        logger.error(f"Grouplist error: {e}")
+        logger.error(f"Grouplist error: {e}") 
     
     async def adminlist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /adminlist command (admin only)"""
