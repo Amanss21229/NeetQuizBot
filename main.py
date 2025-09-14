@@ -1019,28 +1019,28 @@ Let's connect with Aman Directly, privately and securely!
                 await update.message.reply_text("🤷‍♂️ Bot is not in any groups yet.")
                 return
 
-        # Group list banani hai
-        text = "📋 **Groups where bot is active:**\n\n"
-        for i, group in enumerate(groups, start=1):
-            try:
-                chat = await context.bot.get_chat(group['id'])  # Group ka naam
-                members_count = await context.bot.get_chat_member_count(group['id'])  # Members count
-                group_link = f"https://t.me/c/{str(group['id'])[4:]}" if str(group['id']).startswith("-100") else None
+            # Group list banani hai
+            text = "📋 **Groups where bot is active:**\n\n"
+            for i, group in enumerate(groups, start=1):
+                try:
+                    chat = await context.bot.get_chat(group['id'])  # Group ka naam
+                    members_count = await context.bot.get_chat_member_count(group['id'])  # Members count
+                    group_link = f"https://t.me/c/{str(group['id'])[4:]}" if str(group['id']).startswith("-100") else None
 
-                if group_link:
-                    text += f"{i}. [{chat.title}]({group_link}) — 👥 {members_count} members\n"
-                else:
-                    text += f"{i}. {chat.title} — 👥 {members_count} members\n"
+                    if group_link:
+                        text += f"{i}. [{chat.title}]({group_link}) — 👥 {members_count} members\n"
+                    else:
+                        text += f"{i}. {chat.title} — 👥 {members_count} members\n"
             
-            except Exception as e:
-                text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
-                continue
+                except Exception as e:
+                    text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
+                    continue
 
-        await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode="Markdown")
 
-    except Exception as e:
-        await update.message.reply_text("❌ Error fetching group list.")
-        logger.error(f"Grouplist error: {e}")
+        except Exception as e:
+            await update.message.reply_text("❌ Error fetching group list.")
+            logger.error(f"Grouplist error: {e}")
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
