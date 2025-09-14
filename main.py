@@ -976,17 +976,17 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Remove admin error: {e}")
             await update.message.reply_text("❌ Error removing admin.")
 
- async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /grouplist command (admin only)"""
-    user = update.effective_user
+    async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /grouplist command (admin only)"""
+        user = update.effective_user
     
-    # ✅ Sirf admin ke liye
-    if not await db.is_admin(user.id):
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
+        # ✅ Sirf admin ke liye
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
 
-    try:
-        groups = await db.get_all_groups()
+        try:
+            groups = await db.get_all_groups()
         if not groups:
             await update.message.reply_text("🤷‍♂️ Bot is not in any groups yet.")
             return
@@ -1008,11 +1008,12 @@ Let's connect with Aman Directly, privately and securely!
                 text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
                 continue
 
-        await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode="Markdown")
 
-    except Exception as e:
-        await update.message.reply_text("❌ Error fetching group list.")
-        logger.error(f"Grouplist error: {e}") 
+        except Exception as e:
+            await update.message.reply_text("❌ Error fetching group list.")
+            logger.error(f"Grouplist error: {e}")
+
     
     async def adminlist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /adminlist command (admin only)"""
