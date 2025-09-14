@@ -193,7 +193,7 @@ class NEETQuizBot:
             BotCommand("promote", "Promote user as admin"),
             BotCommand("remove", "Remove admin"),
             BotCommand("adminlist", "Show admin list"),
-            Botcommand("grouplist", "show group list"),
+            BotCommand("grouplist", "show group list"),
         ]
         
         await self.application.bot.set_my_commands(commands)
