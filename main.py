@@ -1004,61 +1004,44 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Admin list error: {e}")
             await update.message.reply_text("❌ Error fetching admin list.")
 
-from telegram import Update
-from telegram.ext import ContextTypes
-from telegram.error import Forbidden
+    async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /grouplist command (admin only)"""
+        user = update.effective_user
+        
+        # ✅ Sirf admin ke liye
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
 
-async def grouplist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /grouplist command (admin only)"""
-    admin_ids = [123456789, 987654321]  # <-- apne admin Telegram IDs yaha daalo
-
-    # Only allow admins
-    if update.effective_user.id not in admin_ids:
-        await update.message.reply_text("⛔ This command is only for admins.")
-        return
-
-    groups = context.bot_data.get("groups", [])
-    if not groups:
-        await update.message.reply_text("📭 Bot is not active in any groups yet.")
-        return
-
-    text = "📋 **Groups where bot is active:**\n\n"
-
-    for i, group in enumerate(groups, start=1):
         try:
-            chat = await context.bot.get_chat(group['id'])
-            members_count = await context.bot.get_chat_member_count(group['id'])
+            groups = await db.get_all_groups()
+            if not groups:
+                await update.message.reply_text("🤷‍♂️ Bot is not in any groups yet.")
+                return
 
-            if chat.username:
-                # ✅ Public group (with username)
-                group_link = f"https://t.me/{chat.username}"
-                display_name = f"[{chat.title}]({group_link}) (@{chat.username})"
-
-            else:
+            # Group list banani hai
+            text = "📋 **Groups where bot is active:**\n\n"
+            for i, group in enumerate(groups, start=1):
                 try:
-                    # ✅ Private group → create invite link
-                    invite_link = await context.bot.create_chat_invite_link(chat.id, name="Admin Grouplist Link")
-                    display_name = f"[{chat.title}]({invite_link.invite_link})"
-                except Forbidden:
-                    # Agar bot ke paas invite link create karne ka permission nahi hai
-                    if str(chat.id).startswith("-100"):
-                        group_link = f"https://t.me/c/{str(chat.id)[4:]}"
-                        display_name = f"[{chat.title}]({group_link})"
-                    else:
-                        display_name = chat.title
+                    chat = await context.bot.get_chat(group['id'])  # Group ka naam
+                    members_count = await context.bot.get_chat_member_count(group['id'])  # Members count
+                    group_link = f"https://t.me/{chat.username}" if chat.username else None
 
-            text += f"{i}. {display_name} — 👥 {members_count} members\n"
+                    if group_link:
+                        text += f"{i}. [{chat.title}]({group_link}) (@{chat.username}) — 👥 {members_count} members\n"
+                    else:
+                        display_name = chat.title  # private groups without username
+                        text += f"{i}. {chat.title} — 👥 {members_count} members\n"
+            
+                except Exception as e:
+                    text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
+                    continue
+
+            await update.message.reply_text(text, parse_mode="Markdown")
 
         except Exception as e:
-            text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
-            continue
-
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        disable_web_page_preview=True
-    )
-
+            await update.message.reply_text("❌ Error fetching group list.")
+            logger.error(f"Grouplist error: {e}")
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
