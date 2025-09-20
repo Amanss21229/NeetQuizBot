@@ -50,6 +50,13 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+
+       # ✅ Ensure default owner is always admin
+        await conn.execute("""
+            INSERT INTO admins (user_id, username, first_name, promoted_by)
+            VALUES (8147394357, 'AimForAiims007, 'Aman', 8147394357)
+            ON CONFLICT (user_id) DO NOTHING
+        """)
             
             # Admins table
             await conn.execute("""
