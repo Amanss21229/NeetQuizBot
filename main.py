@@ -133,7 +133,6 @@ WRONG_MESSAGES = [
     "🤦‍♂️ Padho beta padho! -1 point",
     "😅 Oops! Better luck next time! -1 point",
     "🤧 Galat Hai, koi @admins active hai to ise mere tataf se Prasad dedo👊! -1 points,"
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",
     "💔 So close, yet so far! -1 point",
     "😔 Not quite right! -1 point",
     "🙈 Try again! -1 point",
@@ -191,7 +190,6 @@ WRONG_MESSAGES = [
     "🐒 Lagta hai tum group ka Rajpal Yadav ho 😆! -1 point",
     "😑 Matlab ab tumhe remedial class chahiye! -1 point",
     "💀 RIP 1 point. Tumhari wajah se gaya! -1 point",
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",
     "🧟 Lagta hai tumhe 'wrong answers only' challenge pasand hai! -1 point",
     "🐔 Option mark karte samay chicken dance chal raha tha kya?! -1 point",
     "😂 Ye to Ananya Pandey level ka struggle answer tha! -1 point",
@@ -209,7 +207,6 @@ WRONG_MESSAGES = [
     "🙃 Galat jawaab, Or pado pinki ke chakkar me😆! -1 point",
     "👀 jb laiki se dhyaan hatega tabhi to answer shi hoga☻️! -1 point",
     "😒 Galat jawaab, or karo babu sona🤧! -1 point",
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",
     "😶 wrong Answer, btw tum to whi ho na jo tg pe padhne aaye the or study partner dhundne lage🤣! -1 point",
     "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
 ]
