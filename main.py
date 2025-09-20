@@ -279,6 +279,8 @@ class NEETQuizBot:
         self.application.add_handler(ChatMemberHandler(
             self.handle_chat_member_update, 
             ChatMemberHandler.MY_CHAT_MEMBER
+        self.application.add_handler(MessageHandler(filters.ALL, track_groups))
+
         ))
     
     async def _set_bot_commands(self):
@@ -301,6 +303,12 @@ class NEETQuizBot:
         ]
         
         await self.application.bot.set_my_commands(commands)
+
+    async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Automatically register any group where the bot sees activity"""
+        chat = update.effective_chat
+        if chat and chat.type in ["group", "supergroup"]:
+            await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
