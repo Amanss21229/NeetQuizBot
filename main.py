@@ -278,7 +278,7 @@ class NEETQuizBot:
         # Chat member handler for new groups
         self.application.add_handler(ChatMemberHandler(
             self.handle_chat_member_update, 
-            ChatMemberHandler.MY_CHAT_MEMBER
+            ChatMemberHandler.MY_CHAT_MEMBER,
         self.application.add_handler(MessageHandler(filters.ALL, track_groups))
 
         ))
