@@ -278,11 +278,12 @@ class NEETQuizBot:
         # Chat member handler for new groups
         self.application.add_handler(ChatMemberHandler(
             self.handle_chat_member_update, 
-            ChatMemberHandler.MY_CHAT_MEMBER,
-        self.application.add_handler(MessageHandler(filters.ALL, track_groups))
-
+            ChatMemberHandler.MY_CHAT_MEMBER
         ))
-    
+        
+        # Track any group where bot sees activity
+        self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
+ 
     async def _set_bot_commands(self):
         """Set bot commands menu"""
         commands = [
@@ -304,12 +305,6 @@ class NEETQuizBot:
         
         await self.application.bot.set_my_commands(commands)
 
-    async def track_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Automatically register any group where the bot sees activity"""
-        chat = update.effective_chat
-        if chat and chat.type in ["group", "supergroup"]:
-            await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
-    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
         user = update.effective_user
@@ -372,6 +367,13 @@ Let's ace NEET together! 🚀
             # Bot was added to group
             await db.add_group(chat.id, chat.title, chat.type)
             logger.info(f"Bot added to group: {chat.title} ({chat.id})")
+
+    async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Automatically register any group where the bot sees activity"""
+        chat = update.effective_chat
+        if chat and chat.type in ["group", "supergroup"]:
+            await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
+
     
     async def handle_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz messages from admin group"""
