@@ -296,7 +296,7 @@ class NEETQuizBot:
             BotCommand("donate", "Support the bot"),
             BotCommand("developer", "Meet the developer"),
             BotCommand("leaderboard", "Show group leaderboard"),
-            Botcommand("sol", "Show Detail Solution"),
+            BotCommand("sol", "Show Detail Solution"),
         ]
         
         admin_commands = [
@@ -306,8 +306,8 @@ class NEETQuizBot:
             BotCommand("remove", "Remove admin"),
             BotCommand("adminlist", "Show admin list"),
             BotCommand("grouplist", "show group list"),
-            Botcommand("setsol", "Set Detail Solution"),
-            Botcommand("resetleaderboard", "Reset Leaderboard"),
+            BotCommand("setsol", "Set Detail Solution"),
+            BotCommand("resetleaderboard", "Reset Leaderboard"),
         ]
         
         await self.application.bot.set_my_commands(commands)
