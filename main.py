@@ -258,7 +258,8 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("donate", self.donate_command))
         self.application.add_handler(CommandHandler("developer", self.developer_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
-        
+        self.application.add_handler(CommandHandler("sol", self.get_solution))
+      
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
@@ -266,6 +267,9 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("remove", self.remove_command))
         self.application.add_handler(CommandHandler("adminlist", self.adminlist_command))
         self.application.add_handler(CommandHandler("grouplist", self.grouplist_command))
+        self.application.add_handler(CommandHandler("setsol", self.set_solution))
+        self.application.add_handler(CommandHandler("resetleaderboard", self.reset_leaderboard))
+
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
@@ -292,6 +296,7 @@ class NEETQuizBot:
             BotCommand("donate", "Support the bot"),
             BotCommand("developer", "Meet the developer"),
             BotCommand("leaderboard", "Show group leaderboard"),
+            Botcommand("sol", "Show Detail Solution"),
         ]
         
         admin_commands = [
@@ -301,6 +306,8 @@ class NEETQuizBot:
             BotCommand("remove", "Remove admin"),
             BotCommand("adminlist", "Show admin list"),
             BotCommand("grouplist", "show group list"),
+            Botcommand("setsol", "Set Detail Solution"),
+            Botcommand("resetleaderboard", "Reset Leaderboard"),
         ]
         
         await self.application.bot.set_my_commands(commands)
@@ -743,6 +750,101 @@ Let's ace NEET together! 🚀
             
         except Exception as e:
             logger.error(f"Error recording quiz answer: {e}")
+
+    # /setsol command
+    async def set_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        message = update.message
+
+        # Sirf admin check
+        is_admin = await context.bot.db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
+        if not is_admin:
+            await message.reply_text("❌ Sirf admin hi /setsol use kar sakte hain.")
+            return
+
+        if not message.reply_to_message:
+            await message.reply_text("❌ Solution set karne ke liye quiz ke reply me command use karo.")
+            return
+
+        quiz_message_id = message.reply_to_message.message_id
+        group_id = update.effective_chat.id
+
+        # Quiz id fetch karo
+        quiz_id = await context.bot.db.fetchval(
+            "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
+            quiz_message_id, group_id
+        )
+        if not quiz_id:
+            await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
+            return
+
+        # Solution type/content detect
+        if message.text and len(context.args) > 0:
+            sol_type = "text"
+            sol_content = " ".join(context.args)
+        elif message.photo:
+            sol_type = "image"
+            sol_content = message.photo[-1].file_id
+        elif message.video:
+            sol_type = "video"
+            sol_content = message.video.file_id
+        elif message.document:
+            sol_type = "pdf"
+            sol_content = message.document.file_id
+        else:
+            await message.reply_text("❌ Supported formats: text, image, video, pdf, link")
+            return
+
+        # Save or update solution
+        await context.bot.db.execute("""
+            INSERT INTO quiz_solutions (quiz_id, solution_type, solution_content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (quiz_id) DO UPDATE
+            SET solution_type=EXCLUDED.solution_type,
+                solution_content=EXCLUDED.solution_content,
+                updated_at=NOW()
+        """, quiz_id, sol_type, sol_content)
+
+        await message.reply_text("✅ Solution set ho gaya!")
+
+    async def get_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        message = update.message
+
+        if not message.reply_to_message:
+            await message.reply_text("❌ /sol quiz ke reply me use karo.")
+            return
+
+        quiz_message_id = message.reply_to_message.message_id
+        group_id = update.effective_chat.id
+
+        # Quiz id fetch
+        quiz_id = await context.bot.db.fetchval(
+            "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
+            quiz_message_id, group_id
+        )
+        if not quiz_id:
+            await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
+            return
+
+        sol = await context.bot.db.fetchrow(
+            "SELECT solution_type, solution_content FROM quiz_solutions WHERE quiz_id=$1",
+            quiz_id
+        )
+        if not sol:
+            await message.reply_text("❌ Is quiz ka solution abhi set nahi hai.")
+            return
+
+        # Send solution in decorated form
+        if sol["solution_type"] == "text":
+            await message.reply_html(f"📘 <b>Solution:</b>\n\n{sol['solution_content']}")
+        elif sol["solution_type"] == "image":
+            await context.bot.send_photo(chat_id=message.chat_id, photo=sol["solution_content"], caption="📘 Solution")
+        elif sol["solution_type"] == "video":
+            await context.bot.send_video(chat_id=message.chat_id, video=sol["solution_content"], caption="📘 Solution")
+        elif sol["solution_type"] == "pdf":
+            await context.bot.send_document(chat_id=message.chat_id, document=sol["solution_content"], caption="📘 Solution")
+        elif sol["solution_type"] == "link":
+            await message.reply_html(f"🔗 <b>Solution Link:</b> {sol['solution_content']}")
     
     async def refresh_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /refresh command"""
@@ -1118,6 +1220,26 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Admin list error: {e}")
             await update.message.reply_text("❌ Error fetching admin list.")
 
+    async def reset_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        is_admin = await context.bot.db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
+
+        if not is_admin:
+            await update.message.reply_text("❌ Sirf admin hi /resetleaderboard use kar sakte hain.")
+            return
+
+        await context.bot.db.execute("""
+            UPDATE users
+            SET total_score=0,
+                correct_answers=0,
+                wrong_answers=0,
+                unattempted=0,
+                updated_at=NOW()
+        """)
+        await context.bot.db.execute("TRUNCATE TABLE user_quiz_scores RESTART IDENTITY")
+        
+        await update.message.reply_text("✅ Leaderboard reset ho gaya. Ab points fir se count honge.")
+    
     async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /grouplist command (admin only)"""
         user = update.effective_user
