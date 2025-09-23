@@ -752,7 +752,7 @@ Let's ace NEET together! 🚀
             logger.error(f"Error recording quiz answer: {e}")
 
     # /setsol command
-    async def set_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def set_solution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         message = update.message
 
@@ -807,7 +807,7 @@ Let's ace NEET together! 🚀
 
         await message.reply_text("✅ Solution set ho gaya!")
 
-    async def get_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def get_solution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.message
 
         if not message.reply_to_message:
@@ -1220,7 +1220,7 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Admin list error: {e}")
             await update.message.reply_text("❌ Error fetching admin list.")
 
-    async def reset_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def reset_leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         is_admin = await context.bot.db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
 
