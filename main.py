@@ -757,7 +757,7 @@ Let's ace NEET together! 🚀
         message = update.message
 
         # Sirf admin check
-        is_admin = await context.bot.db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
+        is_admin = await db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
         if not is_admin:
             await message.reply_text("❌ Sirf admin hi /setsol use kar sakte hain.")
             return
@@ -770,7 +770,7 @@ Let's ace NEET together! 🚀
         group_id = update.effective_chat.id
 
         # Quiz id fetch karo
-        quiz_id = await context.bot.db.fetchval(
+        quiz_id = await db.fetchval(
             "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
             quiz_message_id, group_id
         )
@@ -796,7 +796,7 @@ Let's ace NEET together! 🚀
             return
 
         # Save or update solution
-        await context.bot.db.execute("""
+        await db.execute("""
             INSERT INTO quiz_solutions (quiz_id, solution_type, solution_content)
             VALUES ($1, $2, $3)
             ON CONFLICT (quiz_id) DO UPDATE
@@ -818,7 +818,7 @@ Let's ace NEET together! 🚀
         group_id = update.effective_chat.id
 
         # Quiz id fetch
-        quiz_id = await context.bot.db.fetchval(
+        quiz_id = await db.fetchval(
             "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
             quiz_message_id, group_id
         )
@@ -826,7 +826,7 @@ Let's ace NEET together! 🚀
             await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
             return
 
-        sol = await context.bot.db.fetchrow(
+        sol = await db.fetchrow(
             "SELECT solution_type, solution_content FROM quiz_solutions WHERE quiz_id=$1",
             quiz_id
         )
@@ -1222,13 +1222,13 @@ Let's connect with Aman Directly, privately and securely!
 
     async def reset_leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        is_admin = await context.bot.db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
+        is_admin = await db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
 
         if not is_admin:
             await update.message.reply_text("❌ Sirf admin hi /resetleaderboard use kar sakte hain.")
             return
 
-        await context.bot.db.execute("""
+        await db.execute("""
             UPDATE users
             SET total_score=0,
                 correct_answers=0,
@@ -1236,7 +1236,7 @@ Let's connect with Aman Directly, privately and securely!
                 unattempted=0,
                 updated_at=NOW()
         """)
-        await context.bot.db.execute("TRUNCATE TABLE user_quiz_scores RESTART IDENTITY")
+        await db.execute("TRUNCATE TABLE user_quiz_scores RESTART IDENTITY")
         
         await update.message.reply_text("✅ Leaderboard reset ho gaya. Ab points fir se count honge.")
     
