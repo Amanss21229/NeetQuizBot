@@ -11,7 +11,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
-    Botcommand,
+    BotCommand,
     Poll,
     PollAnswer,
     ChatMember,
