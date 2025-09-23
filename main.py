@@ -1221,13 +1221,16 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text("❌ Error fetching admin list.")
 
     async def reset_leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Reset universal + group leaderboard (admin only)"""
         user_id = update.effective_user.id
-        is_admin = await db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
 
+        # Admin check
+        is_admin = await db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
         if not is_admin:
             await update.message.reply_text("❌ Sirf admin hi /resetleaderboard use kar sakte hain.")
             return
 
+        # Reset leaderboard
         await db.execute("""
             UPDATE users
             SET total_score=0,
@@ -1236,9 +1239,10 @@ Let's connect with Aman Directly, privately and securely!
                 unattempted=0,
                 updated_at=NOW()
         """)
-        await db.execute("TRUNCATE TABLE user_quiz_scores RESTART IDENTITY")
-        
+        await db.execute("TRUNCATE TABLE user_quiz_scores RESTART IDENTITY CASCADE")
+
         await update.message.reply_text("✅ Leaderboard reset ho gaya. Ab points fir se count honge.")
+        logger.info(f"Leaderboard reset by admin {user_id}")
     
     async def grouplist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /grouplist command (admin only)"""
