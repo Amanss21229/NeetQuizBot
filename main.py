@@ -219,6 +219,7 @@ class NEETQuizBot:
         self.application = None
         self.quiz_data = {}  # Store active quizzes
         self.poll_mapping = {}  # Store poll_id -> {quiz_id, group_id, message_id}
+        self.quiz_mapping = {}  # {forwarded_message_id: quiz_id}
     
     async def initialize(self):
         """Initialize the bot and database"""
@@ -478,7 +479,7 @@ Let's ace NEET together! 🚀
                 correct_option=correct_option_id,
                 options=options
             )
-            
+        
             # Store quiz data for tracking
             self.quiz_data[quiz_id] = {
                 'correct_option': correct_option_id,
