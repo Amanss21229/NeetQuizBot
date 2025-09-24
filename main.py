@@ -558,6 +558,10 @@ Let's ace NEET together! 🚀
                             'group_id': group['id'],
                             'message_id': sent_message.message_id
                         }
+
+                        # ✅ Mapping store karo for /sol
+                        self.quiz_mapping[sent_message.message_id] = quiz_id
+
                         
                         sent_count += 1
                         logger.info(f"✅ Quiz sent to group {group['id']} with poll_id {sent_message.poll.id}")
@@ -752,34 +756,30 @@ Let's ace NEET together! 🚀
         except Exception as e:
             logger.error(f"Error recording quiz answer: {e}")
 
-    # /setsol command
-    async def set_solution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
+    # ✅ Admin set karega solution
+    async def set_solution(self, update, context):
         message = update.message
+        user_id = message.from_user.id
 
-        # Sirf admin check
-        is_admin = await db.fetchval("SELECT 1 FROM admins WHERE user_id=$1", user_id)
+        # Admin check
+        is_admin = await db.is_admin(user_id)
         if not is_admin:
             await message.reply_text("❌ Sirf admin hi /setsol use kar sakte hain.")
             return
 
+        # Reply check
         if not message.reply_to_message:
-            await message.reply_text("❌ Solution set karne ke liye quiz ke reply me command use karo.")
+            await message.reply_text("❌ Quiz ke reply me use karo.")
             return
 
-        quiz_message_id = message.reply_to_message.message_id
-        group_id = update.effective_chat.id
-
-        # Quiz id fetch karo
-        quiz_id = await db.fetchval(
-            "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
-            quiz_message_id, group_id
-        )
-        if not quiz_id:
+        reply_msg_id = message.reply_to_message.message_id
+        if reply_msg_id not in self.quiz_mapping:
             await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
             return
 
-        # Solution type/content detect
+        quiz_id = self.quiz_mapping[reply_msg_id]
+
+        # Solution type detect
         if message.text and len(context.args) > 0:
             sol_type = "text"
             sol_content = " ".join(context.args)
@@ -796,54 +796,50 @@ Let's ace NEET together! 🚀
             await message.reply_text("❌ Supported formats: text, image, video, pdf, link")
             return
 
-        # Save or update solution
-        await db.execute("""
+        # DB me insert/update
+        await db.pool.execute("""
             INSERT INTO quiz_solutions (quiz_id, solution_type, solution_content)
             VALUES ($1, $2, $3)
             ON CONFLICT (quiz_id) DO UPDATE
-            SET solution_type=EXCLUDED.solution_type,
-                solution_content=EXCLUDED.solution_content,
-                updated_at=NOW()
+            SET solution_type = EXCLUDED.solution_type,
+                solution_content = EXCLUDED.solution_content,
+                updated_at = NOW()
         """, quiz_id, sol_type, sol_content)
 
         await message.reply_text("✅ Solution set ho gaya!")
 
-    async def get_solution(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ✅ User solution dekh sakta hai
+    async def get_solution(self, update, context):
         message = update.message
-
         if not message.reply_to_message:
             await message.reply_text("❌ /sol quiz ke reply me use karo.")
             return
 
-        quiz_message_id = message.reply_to_message.message_id
-        group_id = update.effective_chat.id
-
-        # Quiz id fetch
-        quiz_id = await db.fetchval(
-            "SELECT id FROM quizzes WHERE message_id=$1 AND from_group_id=$2",
-            quiz_message_id, group_id
-        )
-        if not quiz_id:
+        reply_msg_id = message.reply_to_message.message_id
+        if reply_msg_id not in self.quiz_mapping:
             await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
             return
 
-        sol = await db.fetchrow(
+        quiz_id = self.quiz_mapping[reply_msg_id]
+
+        sol = await db.pool.fetchrow(
             "SELECT solution_type, solution_content FROM quiz_solutions WHERE quiz_id=$1",
             quiz_id
         )
+
         if not sol:
             await message.reply_text("❌ Is quiz ka solution abhi set nahi hai.")
             return
 
-        # Send solution in decorated form
+        chat_id = update.effective_chat.id
         if sol["solution_type"] == "text":
             await message.reply_html(f"📘 <b>Solution:</b>\n\n{sol['solution_content']}")
         elif sol["solution_type"] == "image":
-            await context.bot.send_photo(chat_id=message.chat_id, photo=sol["solution_content"], caption="📘 Solution")
+            await context.bot.send_photo(chat_id=chat_id, photo=sol["solution_content"], caption="📘 Solution")
         elif sol["solution_type"] == "video":
-            await context.bot.send_video(chat_id=message.chat_id, video=sol["solution_content"], caption="📘 Solution")
+            await context.bot.send_video(chat_id=chat_id, video=sol["solution_content"], caption="📘 Solution")
         elif sol["solution_type"] == "pdf":
-            await context.bot.send_document(chat_id=message.chat_id, document=sol["solution_content"], caption="📘 Solution")
+            await context.bot.send_document(chat_id=chat_id, document=sol["solution_content"], caption="📘 Solution")
         elif sol["solution_type"] == "link":
             await message.reply_html(f"🔗 <b>Solution Link:</b> {sol['solution_content']}")
     
