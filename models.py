@@ -82,6 +82,8 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+
+
             
             # User scores per quiz
             await conn.execute("""
@@ -107,6 +109,17 @@ class Database:
                     UNIQUE(user_id, group_id)
                 )
             """)
+
+    # Quiz Solutions table
+await conn.execute("""
+    CREATE TABLE IF NOT EXISTS quiz_solutions (
+        quiz_id INT PRIMARY KEY REFERENCES quizzes(id),
+        solution_type TEXT,
+        solution_content TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+    )
+""")
+
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
         """Add or update user in database"""
