@@ -47,11 +47,22 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - **group_members**: Group membership tracking
 
 ## Configuration
-- Bot Token: Configured (8281003569:AAF-hCDrlOETHq4aTctogkt7mheAtHga-A8)
+- Bot Token: **REQUIRED** - Add your bot token from @BotFather as `BOT_TOKEN` secret
 - Admin Group ID: -1002848830142
 - Target Channels: @thegodoftgbot, t.me/DrQuizBotUpdates
 - Timezone: Asia/Kolkata (IST)
 - Default Admin: 6195713937 (thegodoftgbot)
+
+### Setup Instructions
+1. **Create Telegram Bot**: Message @BotFather on Telegram and create a new bot
+2. **Get Bot Token**: Copy the token provided by @BotFather
+3. **Add Secret**: In Replit, add the token as a secret named `BOT_TOKEN`
+4. **Run the Bot**: The workflow will automatically start the bot
+
+### Required Environment Variables
+- `BOT_TOKEN`: Your Telegram bot token from @BotFather
+- `DATABASE_URL`: PostgreSQL database connection (automatically configured by Replit)
+- `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGHOST`: Database connection details (automatically configured)
 
 ## Technical Stack
 - **Language**: Python 3.11
