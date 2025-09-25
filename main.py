@@ -787,11 +787,20 @@ Let's ace NEET together! 🚀
             return
 
         reply_msg_id = message.reply_to_message.message_id
-        if reply_msg_id not in self.quiz_mapping:
+        
+        # Check if it's in quiz_mapping (forwarded quiz) or original quiz in admin group
+        quiz_id = None
+        if reply_msg_id in self.quiz_mapping:
+            quiz_id = self.quiz_mapping[reply_msg_id]
+        else:
+            # Check if it's an original quiz in admin group
+            quiz_data = await db.get_quiz_by_message_id(reply_msg_id, ADMIN_GROUP_ID)
+            if quiz_data:
+                quiz_id = quiz_data['id']
+        
+        if not quiz_id:
             await message.reply_text("⚠️ Is message ko quiz ke roop me nahi pehchana gaya.")
             return
-
-        quiz_id = self.quiz_mapping[reply_msg_id]
 
         # Solution type detect
         if message.text and len(context.args) > 0:
