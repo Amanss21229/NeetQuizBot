@@ -301,6 +301,20 @@ class Database:
                 "total_quizzes": total_quizzes,
                 "total_answers": total_answers
             }
+    
+    async def fetchval(self, query: str, *args):
+        """Execute query and return single value"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *args)
+    
+    async def execute(self, query: str, *args):
+        """Execute query without return value"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            return await conn.execute(query, *args)
 
 # Global database instance
 db = Database()
