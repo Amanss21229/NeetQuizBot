@@ -250,6 +250,14 @@ class NEETQuizBot:
             time=time(hour=22, minute=0, tzinfo=TIMEZONE),  # 10:00 PM IST
             name="daily_leaderboards"
         )
+        
+        # Schedule weekly leaderboard reset every Sunday at 11:59 PM IST
+        self.application.job_queue.run_daily(
+            callback=self.reset_weekly_leaderboards,
+            time=time(hour=23, minute=59, tzinfo=TIMEZONE),  # 11:59 PM IST
+            days=(6,),  # Sunday (0=Monday, 6=Sunday)
+            name="weekly_reset"
+        )
     
     def _register_handlers(self):
         """Register all bot handlers"""
@@ -756,10 +764,16 @@ Let's ace NEET together! 🚀
         except Exception as e:
             logger.error(f"Error recording quiz answer: {e}")
 
-    # ✅ Admin set karega solution
+    # ✅ Admin set karega solution (only in admin group)
     async def set_solution(self, update, context):
         message = update.message
         user_id = message.from_user.id
+        chat_id = update.effective_chat.id
+
+        # Admin group check
+        if chat_id != ADMIN_GROUP_ID:
+            await message.reply_text("❌ /setsol sirf admin group me use kar sakte hain.")
+            return
 
         # Admin check
         is_admin = await db.is_admin(user_id)
@@ -796,23 +810,37 @@ Let's ace NEET together! 🚀
             await message.reply_text("❌ Supported formats: text, image, video, pdf, link")
             return
 
-        # DB me insert/update
-        await db.pool.execute("""
-            INSERT INTO quiz_solutions (quiz_id, solution_type, solution_content)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (quiz_id) DO UPDATE
-            SET solution_type = EXCLUDED.solution_type,
-                solution_content = EXCLUDED.solution_content,
-                updated_at = NOW()
-        """, quiz_id, sol_type, sol_content)
+        # DB me insert/update using new method
+        await db.set_quiz_solution(quiz_id, sol_type, sol_content)
 
         await message.reply_text("✅ Solution set ho gaya!")
 
     # ✅ User solution dekh sakta hai
     async def get_solution(self, update, context):
         message = update.message
+        
+        # If not replying to any message, show usage instructions
         if not message.reply_to_message:
-            await message.reply_text("❌ /sol quiz ke reply me use karo.")
+            usage_text = """
+📚 **How to use /sol command:**
+
+1️⃣ Find a quiz in any group
+2️⃣ Reply to that quiz with `/sol`
+3️⃣ Get the detailed solution instantly! 
+
+**Example:**
+• Quiz: "What is mitosis?"
+• Your reply: `/sol`
+• Bot sends: Complete solution with explanation
+
+✨ **Features:**
+• Works in any group
+• Supports text, images, videos, PDFs
+• Get solutions set by admins
+
+🎯 **Note:** Only works when replying to quiz messages!
+            """
+            await message.reply_text(usage_text, parse_mode='Markdown')
             return
 
         reply_msg_id = message.reply_to_message.message_id
@@ -822,26 +850,42 @@ Let's ace NEET together! 🚀
 
         quiz_id = self.quiz_mapping[reply_msg_id]
 
-        sol = await db.pool.fetchrow(
-            "SELECT solution_type, solution_content FROM quiz_solutions WHERE quiz_id=$1",
-            quiz_id
-        )
+        # Get solution using new database method
+        solution = await db.get_quiz_solution(quiz_id)
 
-        if not sol:
-            await message.reply_text("❌ Is quiz ka solution abhi set nahi hai.")
+        if not solution:
+            # Create redirect button to admin
+            keyboard = [
+                [InlineKeyboardButton("📞 Contact Admin", url="https://t.me/thegodoftgbot")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            no_solution_text = """
+❌ **Solution Not Available**
+
+🔍 Is quiz ka solution admin ne abhi set nahi kiya hai.
+
+📞 **Admin se contact karne ke liye neeche button click karo:**
+            """
+            await message.reply_text(
+                no_solution_text, 
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
             return
 
+        # Send solution based on type
         chat_id = update.effective_chat.id
-        if sol["solution_type"] == "text":
-            await message.reply_html(f"📘 <b>Solution:</b>\n\n{sol['solution_content']}")
-        elif sol["solution_type"] == "image":
-            await context.bot.send_photo(chat_id=chat_id, photo=sol["solution_content"], caption="📘 Solution")
-        elif sol["solution_type"] == "video":
-            await context.bot.send_video(chat_id=chat_id, video=sol["solution_content"], caption="📘 Solution")
-        elif sol["solution_type"] == "pdf":
-            await context.bot.send_document(chat_id=chat_id, document=sol["solution_content"], caption="📘 Solution")
-        elif sol["solution_type"] == "link":
-            await message.reply_html(f"🔗 <b>Solution Link:</b> {sol['solution_content']}")
+        if solution["solution_type"] == "text":
+            await message.reply_html(f"📘 <b>Solution:</b>\n\n{solution['solution_content']}")
+        elif solution["solution_type"] == "image":
+            await context.bot.send_photo(chat_id=chat_id, photo=solution["solution_content"], caption="📘 Solution")
+        elif solution["solution_type"] == "video":
+            await context.bot.send_video(chat_id=chat_id, video=solution["solution_content"], caption="📘 Solution")
+        elif solution["solution_type"] == "pdf":
+            await context.bot.send_document(chat_id=chat_id, document=solution["solution_content"], caption="📘 Solution")
+        elif solution["solution_type"] == "link":
+            await message.reply_html(f"🔗 <b>Solution Link:</b> {solution['solution_content']}")
     
     async def refresh_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /refresh command"""
@@ -1354,6 +1398,40 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Error in daily leaderboard task: {e}")
     
+    async def reset_weekly_leaderboards(self, context: ContextTypes.DEFAULT_TYPE):
+        """Reset weekly leaderboards every Sunday at 11:59 PM IST"""
+        try:
+            logger.info("Starting weekly leaderboard reset...")
+            
+            # Reset the leaderboard in database
+            await db.reset_weekly_leaderboard()
+            
+            # Send notification to admin group
+            reset_message = """
+🔄 **Weekly Leaderboard Reset**
+
+📅 **Sunday Night Reset Completed!**
+
+✅ All user scores have been reset to 0
+✅ All quiz scores have been cleared  
+✅ Fresh start for the new week!
+
+🚀 Let's begin a new week of NEET preparation! Good luck to everyone! 💪
+            """
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=reset_message,
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Error sending reset notification to admin group: {e}")
+            
+            logger.info("Weekly leaderboard reset completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error in weekly leaderboard reset: {e}")
     
     async def run(self):
         """Run the bot"""

@@ -1,9 +1,13 @@
 import asyncio
 import asyncpg
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Union
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
@@ -51,15 +55,7 @@ class Database:
                 )
             """)
 
-            # ✅ Ensure default owner is always admin
-            await conn.execute("""
-                INSERT INTO admins (user_id, username, first_name, promoted_by)
-                VALUES (8147394357, 'aimforaiims007', 'Aman', 8147394357)
-                ON CONFLICT (user_id) DO NOTHING
-            """)
-
-                 
-            # Admins table
+            # Admins table (create before inserting data)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
                     user_id BIGINT PRIMARY KEY,
@@ -68,6 +64,13 @@ class Database:
                     promoted_by BIGINT,
                     created_at TIMESTAMP DEFAULT NOW()
                 )
+            """)
+
+            # ✅ Ensure default owner is always admin
+            await conn.execute("""
+                INSERT INTO admins (user_id, username, first_name, promoted_by)
+                VALUES (8147394357, 'aimforaiims007', 'Aman', 8147394357)
+                ON CONFLICT (user_id) DO NOTHING
             """)
             
             # Quizzes table
@@ -315,6 +318,64 @@ class Database:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             return await conn.execute(query, *args)
+    
+    async def reset_weekly_leaderboard(self):
+        """Reset all user scores and quiz scores for weekly leaderboard reset"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            # Reset all user total scores and stats
+            await conn.execute("""
+                UPDATE users SET 
+                    total_score = 0,
+                    correct_answers = 0,
+                    wrong_answers = 0,
+                    unattempted = 0,
+                    updated_at = NOW()
+            """)
+            
+            # Delete all user quiz scores
+            await conn.execute("DELETE FROM user_quiz_scores")
+            
+            logger.info("Weekly leaderboard reset completed successfully")
+    
+    async def set_quiz_solution(self, quiz_id: int, solution_type: str, solution_content: str):
+        """Set solution for a quiz"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO quiz_solutions (quiz_id, solution_type, solution_content, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (quiz_id) DO UPDATE SET
+                    solution_type = $2,
+                    solution_content = $3,
+                    updated_at = NOW()
+            """, quiz_id, solution_type, solution_content)
+    
+    async def get_quiz_solution(self, quiz_id: int) -> Optional[Dict]:
+        """Get solution for a quiz"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT solution_type, solution_content, updated_at
+                FROM quiz_solutions
+                WHERE quiz_id = $1
+            """, quiz_id)
+            return dict(row) if row else None
+    
+    async def get_quiz_by_message_id(self, message_id: int, group_id: int) -> Optional[Dict]:
+        """Get quiz by message ID from specific group"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, quiz_text, correct_option, options
+                FROM quizzes
+                WHERE message_id = $1 AND from_group_id = $2
+            """, message_id, group_id)
+            return dict(row) if row else None
 
 # Global database instance
 db = Database()
