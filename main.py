@@ -129,7 +129,10 @@ CORRECT_MESSAGES = [
 
 # Sad/funny messages for wrong answers
 WRONG_MESSAGES = [
-    "😢 Beda garak! -1 point",
+    "😢 Beda garak, isi baat pe pesh hai ek shayari: Talash Meri Thi, or Bhaak rha tha wo,
+Dil Mera tha or dhadak rha tha wo.
+Pyar ka talluk v ajeeb hota hai,
+Aansu mere the or sisak rha tha wo❤️‍🩹, enjoy kya Kar rhe band karo ye sb or padhai karo buddhu😂😂! -1 point",
     "🤦‍♂️ Padho beta padho! -1 point",
     "😅 Oops! Better luck next time! -1 point",
     "🤧 Galat Hai, koi @admins active hai to ise mere tataf se Prasad dedo👊! -1 points,"
@@ -138,13 +141,13 @@ WRONG_MESSAGES = [
     "🙈 Try again! -1 point",
     "😞 Almost there! -1 point",
     "☻️ sirf reproduction padhne se neet nhi nikala beta🤡! -1 point",     
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",
+    "😏 Sirf Manzil ko bhula kar jiya to kya jiya wala motivation sunne se kuchh nhi hoga paglu! -1 point",
     "🤷‍♂️ Galat jawab! -1 point",
     "😵 Wrong choice! -1 point",
     "🤕 Thoda aur mehnat! -1 point",
     "🥲 kyu nhi ho rhi padhai! -1 point",
     "🤒 Dekha Laparwaahi ka naatiza! -1 point",
-    "😏 wrong! Waah bete, padhai chhodo aur shaadi.com join kar lo! -1 point",
+    "😏 wrong! Waah bete, padhai chhodo aur tinder join kar lo! -1 point",
     "😂 wrong Answer! Itna confidence galat answer me? Mazza aa gya! -1 point",
     "🤦 NEET dene aaye ho ya Splitsvilla audition?, Galat hai ye Answer! -1 point",
     "🙄 wrong Answer! NCERT padhne se zyada toh tumne reels save ki hogi! -1 point",
@@ -160,7 +163,7 @@ WRONG_MESSAGES = [
     "😏 Galtiyan bhi tumhari cuteness pe fida ho gayi! -1 point",
     "🙃 Tumhara galat answer bhi itna pyaara hai ki -1 bhi smile de gaya! -1 point",
     "🐔 Lagta hai option choose karte waqt ‘Inky Pinky Ponky’ chal raha tha! -1 point",
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",
+    "😏 Answer kaha se shi hoga, Tum to poora din Telegram pe oo ji aho ji karte rehte ho😂! -1 point",
     "🤣 Aapka jawaab galat hai… lekin attitude ekdum topper jaisa! -1 point",
     "😈 Doctor banna hai ya Crush ka personal chemist?! -1 point",
     "🥲 Tumhara galat answer bhi itna confident tha ki mujhe doubt ho gaya! -1 point",
@@ -203,7 +206,7 @@ WRONG_MESSAGES = [
     "😔 Wrong… ab agle question me sudhar laana padega! -1 point",
     "😋 Ye galti bhi cute hai… par marks cut gaya.! -1 point",
     "🎭 Tumne quiz ko joke samjh liya kya?! -1 point",   
-    "😏 Answer kaha se shi hoga, Tum to poora din @BoyGirlChatBot use karte rehte ho🤭! -1 point",    
+    "😏 Answer kaha se shi hoga, Tum to poora din to Doremon dekhte rehte ho🥲! -1 point",    
     "🤕 Tumhara crush, ex koi v tumko bhaav to deta nhi tha, Ab NCERT bhi bhav nhi de rhi kya? 🫢 ! -1 point",
     "😑 galat jawaab, extra class ke naam pe kha jaate the beta🤭! -1 point",
     "😌 wrong answer, BTW Tum to one shot waale ho na! -1 point",
