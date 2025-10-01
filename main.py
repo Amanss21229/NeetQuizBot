@@ -129,10 +129,7 @@ CORRECT_MESSAGES = [
 
 # Sad/funny messages for wrong answers
 WRONG_MESSAGES = [
-    "😢 Beda garak, isi baat pe pesh hai ek shayari: Talash Meri Thi, or Bhaak rha tha wo,
-Dil Mera tha or dhadak rha tha wo.
-Pyar ka talluk v ajeeb hota hai,
-Aansu mere the or sisak rha tha wo❤️‍🩹, enjoy kya Kar rhe band karo ye sb or padhai karo buddhu😂😂! -1 point",
+    "😢 Beda garak, isi baat pe pesh hai ek shayari: Talash Meri Thi, or Bhaak rha tha wo,Dil Mera tha or dhadak rha tha wo.Pyar ka talluk v ajeeb hota hai,Aansu mere the or sisak rha tha wo❤️‍🩹, enjoy kya Kar rhe band karo ye sb or padhai karo buddhu😂😂! -1 point",
     "🤦‍♂️ Padho beta padho! -1 point",
     "😅 Oops! Better luck next time! -1 point",
     "🤧 Galat Hai, koi @admins active hai to ise mere tataf se Prasad dedo👊! -1 points,"
