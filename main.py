@@ -231,8 +231,8 @@ class NEETQuizBot:
         # Add default admin (you can add your user ID here)
         try:
             await db.add_admin(
-                user_id=6195713937,  # Add your actual user ID here
-                username="thegodoftgbot",
+                user_id=8162524828,  # Add your actual user ID here
+                username="indiantguser",
                 first_name="Admin"
             )
         except:
