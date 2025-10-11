@@ -342,8 +342,8 @@ class NEETQuizBot:
         # Create inline keyboard
         keyboard = [
             [InlineKeyboardButton("➕ Add Me in Your Group", url=f"https://t.me/{context.bot.username}?startgroup=true")],
-            [InlineKeyboardButton("🧑🏻‍💼 Meet the Owner", url="https://t.me/thegodoftgbot")],
-            [InlineKeyboardButton("📢 Join Our Community", url="https://t.me/DrQuizBotUpdates")]
+            [InlineKeyboardButton("🧑🏻‍💼 Meet the Owner", url="https://t.me/Aman_PersonalBot")],
+            [InlineKeyboardButton("📢 Join Our Community", url="https://t.me/DrQuizRobotUpdates")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -865,7 +865,7 @@ Let's ace NEET together! 🚀
         if not solution:
             # Create redirect button to admin
             keyboard = [
-                [InlineKeyboardButton("📞 Contact Admin", url="https://t.me/thegodoftgbot")]
+                [InlineKeyboardButton("📞 Contact Admin", url="https://t.me/Aman_PersonalBot")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -906,7 +906,7 @@ Let's ace NEET together! 🚀
         
         # Create donation button
         keyboard = [
-            [InlineKeyboardButton("💝 𝗗𝗢𝗡𝗔𝗧𝗘 𝗡𝗢𝗪 💝", url="https://t.me/DrQuizDonationBot")]
+            [InlineKeyboardButton("💝 𝗗𝗢𝗡𝗔𝗧𝗘 𝗡𝗢𝗪 💝", url="https://t.me/DrQuizDonationRobot")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -958,8 +958,8 @@ Let's ace NEET together! 🚀
         user = update.effective_user
         
         keyboard = [
-            [InlineKeyboardButton("💬 Meet With Aman", url="https://t.me/thegodoftgbot")],
-            [InlineKeyboardButton("🌟 Follow Updates", url="https://t.me/DrQuizBotUpdates")]
+            [InlineKeyboardButton("💬 Meet With Aman", url="https://t.me/Aman_PersonalBot")],
+            [InlineKeyboardButton("🌟 Follow Updates", url="https://t.me/DrQuizRobotUpdates")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -974,6 +974,7 @@ Let's ace NEET together! 🚀
 
 ⚡ Who is Aman?
 🏢 Founder & CEO of 『Sᴀɴsᴀ Fᴇᴇʟ』
+✈️ Owner Of AimAi 【Your Personal Ai Tutor For Neet & Jee Preparation】
 🎓 working On Different Projects. 
 💻 Tech Innovator building educational solutions
 🏆 very soon going to launch Neet Quiz App with multiple features.  
