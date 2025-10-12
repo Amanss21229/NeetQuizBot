@@ -278,6 +278,9 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("grouplist", self.grouplist_command))
         self.application.add_handler(CommandHandler("setsol", self.set_solution))
         self.application.add_handler(CommandHandler("resetleaderboard", self.reset_leaderboard))
+        self.application.add_handler(CommandHandler("addpositivereply", self.add_positive_reply_command))
+        self.application.add_handler(CommandHandler("addnegativereply", self.add_negative_reply_command))
+        self.application.add_handler(CommandHandler("removereply", self.remove_reply_command))
 
         
         # Poll and quiz handlers
@@ -317,6 +320,9 @@ class NEETQuizBot:
             BotCommand("grouplist", "show group list"),
             BotCommand("setsol", "Set Detail Solution"),
             BotCommand("resetleaderboard", "Reset Leaderboard"),
+            BotCommand("addpositivereply", "Add positive reply"),
+            BotCommand("addnegativereply", "Add negative reply"),
+            BotCommand("removereply", "Remove custom reply"),
         ]
         
         await self.application.bot.set_my_commands(commands)
@@ -1332,6 +1338,196 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             await update.message.reply_text("❌ Error fetching group list.")
             logger.error(f"Grouplist error: {e}")
+    
+    async def add_positive_reply_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /addpositivereply command (admin only)"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not update.message.reply_to_message:
+            await update.message.reply_text("❌ Please reply to a message/media to add it as a positive reply.")
+            return
+        
+        replied_msg = update.message.reply_to_message
+        
+        try:
+            message_type = None
+            content = None
+            file_id = None
+            caption = None
+            
+            if replied_msg.text:
+                message_type = "text"
+                content = replied_msg.text
+            elif replied_msg.photo:
+                message_type = "photo"
+                file_id = replied_msg.photo[-1].file_id
+                caption = replied_msg.caption
+            elif replied_msg.video:
+                message_type = "video"
+                file_id = replied_msg.video.file_id
+                caption = replied_msg.caption
+            elif replied_msg.document:
+                message_type = "document"
+                file_id = replied_msg.document.file_id
+                caption = replied_msg.caption
+            elif replied_msg.sticker:
+                message_type = "sticker"
+                file_id = replied_msg.sticker.file_id
+            elif replied_msg.audio:
+                message_type = "audio"
+                file_id = replied_msg.audio.file_id
+                caption = replied_msg.caption
+            elif replied_msg.voice:
+                message_type = "voice"
+                file_id = replied_msg.voice.file_id
+                caption = replied_msg.caption
+            elif replied_msg.animation:
+                message_type = "animation"
+                file_id = replied_msg.animation.file_id
+                caption = replied_msg.caption
+            else:
+                await update.message.reply_text("❌ Unsupported message type.")
+                return
+            
+            reply_id = await db.add_custom_reply(
+                reply_type="positive",
+                message_type=message_type,
+                content=content,
+                file_id=file_id,
+                caption=caption,
+                added_by=user.id
+            )
+            
+            await update.message.reply_text(f"✅ Positive reply added successfully! (ID: {reply_id})")
+            logger.info(f"Admin {user.id} added positive reply: {message_type}")
+            
+        except Exception as e:
+            logger.error(f"Error adding positive reply: {e}")
+            await update.message.reply_text("❌ Error adding positive reply.")
+    
+    async def add_negative_reply_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /addnegativereply command (admin only)"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not update.message.reply_to_message:
+            await update.message.reply_text("❌ Please reply to a message/media to add it as a negative reply.")
+            return
+        
+        replied_msg = update.message.reply_to_message
+        
+        try:
+            message_type = None
+            content = None
+            file_id = None
+            caption = None
+            
+            if replied_msg.text:
+                message_type = "text"
+                content = replied_msg.text
+            elif replied_msg.photo:
+                message_type = "photo"
+                file_id = replied_msg.photo[-1].file_id
+                caption = replied_msg.caption
+            elif replied_msg.video:
+                message_type = "video"
+                file_id = replied_msg.video.file_id
+                caption = replied_msg.caption
+            elif replied_msg.document:
+                message_type = "document"
+                file_id = replied_msg.document.file_id
+                caption = replied_msg.caption
+            elif replied_msg.sticker:
+                message_type = "sticker"
+                file_id = replied_msg.sticker.file_id
+            elif replied_msg.audio:
+                message_type = "audio"
+                file_id = replied_msg.audio.file_id
+                caption = replied_msg.caption
+            elif replied_msg.voice:
+                message_type = "voice"
+                file_id = replied_msg.voice.file_id
+                caption = replied_msg.caption
+            elif replied_msg.animation:
+                message_type = "animation"
+                file_id = replied_msg.animation.file_id
+                caption = replied_msg.caption
+            else:
+                await update.message.reply_text("❌ Unsupported message type.")
+                return
+            
+            reply_id = await db.add_custom_reply(
+                reply_type="negative",
+                message_type=message_type,
+                content=content,
+                file_id=file_id,
+                caption=caption,
+                added_by=user.id
+            )
+            
+            await update.message.reply_text(f"✅ Negative reply added successfully! (ID: {reply_id})")
+            logger.info(f"Admin {user.id} added negative reply: {message_type}")
+            
+        except Exception as e:
+            logger.error(f"Error adding negative reply: {e}")
+            await update.message.reply_text("❌ Error adding negative reply.")
+    
+    async def remove_reply_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /removereply command (admin only)"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not update.message.reply_to_message:
+            await update.message.reply_text("❌ Please reply to a message/media to remove it from custom replies.")
+            return
+        
+        replied_msg = update.message.reply_to_message
+        
+        try:
+            content = None
+            file_id = None
+            
+            if replied_msg.text:
+                content = replied_msg.text
+            elif replied_msg.photo:
+                file_id = replied_msg.photo[-1].file_id
+            elif replied_msg.video:
+                file_id = replied_msg.video.file_id
+            elif replied_msg.document:
+                file_id = replied_msg.document.file_id
+            elif replied_msg.sticker:
+                file_id = replied_msg.sticker.file_id
+            elif replied_msg.audio:
+                file_id = replied_msg.audio.file_id
+            elif replied_msg.voice:
+                file_id = replied_msg.voice.file_id
+            elif replied_msg.animation:
+                file_id = replied_msg.animation.file_id
+            else:
+                await update.message.reply_text("❌ Unsupported message type.")
+                return
+            
+            deleted_count = await db.remove_custom_reply(content=content, file_id=file_id)
+            
+            if deleted_count > 0:
+                await update.message.reply_text(f"✅ Custom reply removed successfully! ({deleted_count} entries deleted)")
+                logger.info(f"Admin {user.id} removed {deleted_count} custom reply(ies)")
+            else:
+                await update.message.reply_text("❌ No matching custom reply found in database.")
+            
+        except Exception as e:
+            logger.error(f"Error removing custom reply: {e}")
+            await update.message.reply_text("❌ Error removing custom reply.")
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
