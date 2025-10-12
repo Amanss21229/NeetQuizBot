@@ -122,6 +122,20 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            
+            # Custom Replies table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS custom_replies (
+                    id SERIAL PRIMARY KEY,
+                    reply_type TEXT NOT NULL,
+                    message_type TEXT NOT NULL,
+                    content TEXT,
+                    file_id TEXT,
+                    caption TEXT,
+                    added_by BIGINT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
@@ -376,6 +390,52 @@ class Database:
                 WHERE message_id = $1 AND from_group_id = $2
             """, message_id, group_id)
             return dict(row) if row else None
+    
+    async def add_custom_reply(self, reply_type: str, message_type: str, content: Optional[str] = None, 
+                              file_id: Optional[str] = None, caption: Optional[str] = None, added_by: Optional[int] = None) -> int:
+        """Add custom reply to database"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            reply_id = await conn.fetchval("""
+                INSERT INTO custom_replies (reply_type, message_type, content, file_id, caption, added_by)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+            """, reply_type, message_type, content, file_id, caption, added_by)
+            return reply_id
+    
+    async def get_custom_replies(self, reply_type: str) -> List[Dict]:
+        """Get all custom replies of a specific type (positive/negative)"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, message_type, content, file_id, caption
+                FROM custom_replies
+                WHERE reply_type = $1
+                ORDER BY created_at DESC
+            """, reply_type)
+            return [dict(row) for row in rows]
+    
+    async def remove_custom_reply(self, content: Optional[str] = None, file_id: Optional[str] = None) -> int:
+        """Remove custom reply by content or file_id. Returns number of deleted rows"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            if content:
+                result = await conn.execute("""
+                    DELETE FROM custom_replies WHERE content = $1
+                """, content)
+            elif file_id:
+                result = await conn.execute("""
+                    DELETE FROM custom_replies WHERE file_id = $1
+                """, file_id)
+            else:
+                return 0
+            
+            # Extract number of deleted rows from result string
+            deleted_count = int(result.split()[-1]) if result else 0
+            return deleted_count
 
 # Global database instance
 db = Database()
