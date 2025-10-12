@@ -695,6 +695,115 @@ Let's ace NEET together! 🚀
         # Schedule forwarding after 30 seconds
         await self._schedule_quiz_forwarding(quiz_id_to_update, context)
     
+    async def send_quiz_reply(self, context: ContextTypes.DEFAULT_TYPE, group_id: int, user, reply_type: str):
+        """Send quiz reply (text or media) from hardcoded messages + custom replies"""
+        try:
+            # Get custom replies from database
+            custom_replies = await db.get_custom_replies(reply_type)
+            
+            # Combine hardcoded messages with custom replies for text
+            if reply_type == "positive":
+                text_replies = CORRECT_MESSAGES.copy()
+            else:
+                text_replies = WRONG_MESSAGES.copy()
+            
+            # Add custom text replies to the pool
+            custom_text_replies = [r for r in custom_replies if r['message_type'] == 'text']
+            for reply in custom_text_replies:
+                text_replies.append(reply['content'])
+            
+            # Get all reply options (text + media)
+            all_replies = custom_replies + [{'message_type': 'text', 'content': msg} for msg in (CORRECT_MESSAGES if reply_type == "positive" else WRONG_MESSAGES)]
+            
+            # Select a random reply
+            selected_reply = random.choice(all_replies)
+            
+            user_mention = f"[{user.first_name}](tg://user?id={user.id})"
+            emoji = "🎉" if reply_type == "positive" else "😔"
+            
+            # Send based on message type
+            if selected_reply['message_type'] == 'text':
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=f"{emoji} {user_mention} {selected_reply['content']}",
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'photo':
+                caption = f"{emoji} {user_mention} {selected_reply.get('caption', '')}" if selected_reply.get('caption') else f"{emoji} {user_mention}"
+                await context.bot.send_photo(
+                    chat_id=group_id,
+                    photo=selected_reply['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'video':
+                caption = f"{emoji} {user_mention} {selected_reply.get('caption', '')}" if selected_reply.get('caption') else f"{emoji} {user_mention}"
+                await context.bot.send_video(
+                    chat_id=group_id,
+                    video=selected_reply['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'document':
+                caption = f"{emoji} {user_mention} {selected_reply.get('caption', '')}" if selected_reply.get('caption') else f"{emoji} {user_mention}"
+                await context.bot.send_document(
+                    chat_id=group_id,
+                    document=selected_reply['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'sticker':
+                await context.bot.send_sticker(
+                    chat_id=group_id,
+                    sticker=selected_reply['file_id']
+                )
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=f"{emoji} {user_mention}",
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'audio':
+                caption = f"{emoji} {user_mention} {selected_reply.get('caption', '')}" if selected_reply.get('caption') else f"{emoji} {user_mention}"
+                await context.bot.send_audio(
+                    chat_id=group_id,
+                    audio=selected_reply['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'voice':
+                await context.bot.send_voice(
+                    chat_id=group_id,
+                    voice=selected_reply['file_id'],
+                    caption=f"{emoji} {user_mention}",
+                    parse_mode='Markdown'
+                )
+            elif selected_reply['message_type'] == 'animation':
+                caption = f"{emoji} {user_mention} {selected_reply.get('caption', '')}" if selected_reply.get('caption') else f"{emoji} {user_mention}"
+                await context.bot.send_animation(
+                    chat_id=group_id,
+                    animation=selected_reply['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+                
+        except Exception as e:
+            logger.error(f"Error sending quiz reply: {e}")
+            # Fallback to hardcoded text message
+            if reply_type == "positive":
+                response = random.choice(CORRECT_MESSAGES)
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=f"🎉 [{user.first_name}](tg://user?id={user.id}) {response}",
+                    parse_mode='Markdown'
+                )
+            else:
+                response = random.choice(WRONG_MESSAGES)
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=f"😔 [{user.first_name}](tg://user?id={user.id}) {response}",
+                    parse_mode='Markdown'
+                )
+    
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz answers"""
         poll_answer = update.poll_answer
@@ -751,19 +860,9 @@ Let's ace NEET together! 🚀
             
             # Send response message to the GROUP (also DM)
             if message_type == "correct":
-                response = random.choice(CORRECT_MESSAGES)
-                await context.bot.send_message(
-                    chat_id=group_id,
-                    text=f"🎉 [{user.first_name}](tg://user?id={user.id}) {response}",
-                    parse_mode='Markdown'
-                )
+                await self.send_quiz_reply(context, group_id, user, "positive")
             elif message_type == "wrong":
-                response = random.choice(WRONG_MESSAGES)
-                await context.bot.send_message(
-                    chat_id=group_id,
-                    text=f"😔 [{user.first_name}](tg://user?id={user.id}) {response}",
-                    parse_mode='Markdown'
-                )
+                await self.send_quiz_reply(context, group_id, user, "negative")
             
             logger.info(f"Quiz answer recorded: User {user.id}, Group: {group_id}, Points: {points}")
             
