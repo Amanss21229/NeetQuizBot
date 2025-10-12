@@ -4,6 +4,10 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-10-12: Added custom reply management system
+  - New admin commands: /addpositivereply, /addnegativereply, /removereply
+  - Support for text and media replies (photos, videos, documents, stickers, audio, voice, GIFs)
+  - Custom replies integrated with existing hardcoded messages
 - 2025-09-12: Initial bot implementation with all core features
 - Database models created with proper schema for users, groups, quizzes, scores, and admins
 - Main bot file with complete functionality including start commands, quiz handling, scoring system, and daily leaderboards
