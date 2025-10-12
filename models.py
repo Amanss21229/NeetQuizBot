@@ -50,9 +50,23 @@ class Database:
                     title TEXT,
                     type TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
+                    replies_enabled BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
+            """)
+            
+            # Migration: Add replies_enabled column if it doesn't exist (for existing databases)
+            await conn.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='groups' AND column_name='replies_enabled'
+                    ) THEN
+                        ALTER TABLE groups ADD COLUMN replies_enabled BOOLEAN DEFAULT TRUE;
+                    END IF;
+                END $$;
             """)
 
             # Admins table (create before inserting data)
@@ -436,6 +450,26 @@ class Database:
             # Extract number of deleted rows from result string
             deleted_count = int(result.split()[-1]) if result else 0
             return deleted_count
+    
+    async def set_group_replies_status(self, group_id: int, enabled: bool):
+        """Enable or disable replies for a group"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE groups SET replies_enabled = $2, updated_at = NOW()
+                WHERE id = $1
+            """, group_id, enabled)
+    
+    async def is_group_replies_enabled(self, group_id: int) -> bool:
+        """Check if replies are enabled for a group"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("""
+                SELECT replies_enabled FROM groups WHERE id = $1
+            """, group_id)
+            return result if result is not None else True
 
 # Global database instance
 db = Database()

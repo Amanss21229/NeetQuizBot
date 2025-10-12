@@ -281,6 +281,8 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("addpositivereply", self.add_positive_reply_command))
         self.application.add_handler(CommandHandler("addnegativereply", self.add_negative_reply_command))
         self.application.add_handler(CommandHandler("removereply", self.remove_reply_command))
+        self.application.add_handler(CommandHandler("replyoff", self.replyoff_command))
+        self.application.add_handler(CommandHandler("replyon", self.replyon_command))
 
         
         # Poll and quiz handlers
@@ -858,11 +860,13 @@ Let's ace NEET together! 🚀
                 points=points
             )
             
-            # Send response message to the GROUP (also DM)
-            if message_type == "correct":
-                await self.send_quiz_reply(context, group_id, user, "positive")
-            elif message_type == "wrong":
-                await self.send_quiz_reply(context, group_id, user, "negative")
+            # Send response message to the GROUP only if replies are enabled
+            replies_enabled = await db.is_group_replies_enabled(group_id)
+            if replies_enabled:
+                if message_type == "correct":
+                    await self.send_quiz_reply(context, group_id, user, "positive")
+                elif message_type == "wrong":
+                    await self.send_quiz_reply(context, group_id, user, "negative")
             
             logger.info(f"Quiz answer recorded: User {user.id}, Group: {group_id}, Points: {points}")
             
@@ -1627,6 +1631,92 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Error removing custom reply: {e}")
             await update.message.reply_text("❌ Error removing custom reply.")
+    
+    async def replyoff_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /replyoff command - disable replies in group (admin/group admin only)"""
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only works in groups
+        if chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("❌ This command can only be used in groups.")
+            return
+        
+        # Check if user is bot admin or group admin
+        is_bot_admin = await db.is_admin(user.id)
+        
+        # Check if user is group admin
+        try:
+            member = await context.bot.get_chat_member(chat.id, user.id)
+            is_group_admin = member.status in ['creator', 'administrator']
+        except:
+            is_group_admin = False
+        
+        # If neither bot admin nor group admin, deny access
+        if not is_bot_admin and not is_group_admin:
+            await update.message.reply_text(
+                "🚫 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗗𝗘𝗡𝗜𝗘𝗗**\n\n"
+                "❌ 𝙏𝙝𝙞𝙨 𝙘𝙤𝙢𝙢𝙖𝙣𝙙 𝙞𝙨 𝙤𝙣𝙡𝙮 𝙛𝙤𝙧 𝙖𝙙𝙢𝙞𝙣𝙨!\n\n"
+                "👮‍♂️ Only group admins and bot admins can use this command.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Disable replies for this group
+        await db.set_group_replies_status(chat.id, False)
+        
+        await update.message.reply_text(
+            "🔕 **𝗥𝗘𝗣𝗟𝗜𝗘𝗦 𝗗𝗜𝗦𝗔𝗕𝗟𝗘𝗗**\n\n"
+            "✅ Quiz replies have been turned OFF for this group.\n\n"
+            "📌 Users can still answer quizzes and earn points.\n"
+            "💬 But bot won't send congratulatory/failure messages.\n\n"
+            "🔔 Use /replyon to enable replies again.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"User {user.id} disabled replies in group {chat.id}")
+    
+    async def replyon_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /replyon command - enable replies in group (admin/group admin only)"""
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only works in groups
+        if chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("❌ This command can only be used in groups.")
+            return
+        
+        # Check if user is bot admin or group admin
+        is_bot_admin = await db.is_admin(user.id)
+        
+        # Check if user is group admin
+        try:
+            member = await context.bot.get_chat_member(chat.id, user.id)
+            is_group_admin = member.status in ['creator', 'administrator']
+        except:
+            is_group_admin = False
+        
+        # If neither bot admin nor group admin, deny access
+        if not is_bot_admin and not is_group_admin:
+            await update.message.reply_text(
+                "🚫 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗗𝗘𝗡𝗜𝗘𝗗**\n\n"
+                "❌ 𝙏𝙝𝙞𝙨 𝙘𝙤𝙢𝙢𝙖𝙣𝙙 𝙞𝙨 𝙤𝙣𝙡𝙮 𝙛𝙤𝙧 𝙖𝙙𝙢𝙞𝙣𝙨!\n\n"
+                "👮‍♂️ Only group admins and bot admins can use this command.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Enable replies for this group
+        await db.set_group_replies_status(chat.id, True)
+        
+        await update.message.reply_text(
+            "🔔 **𝗥𝗘𝗣𝗟𝗜𝗘𝗦 𝗘𝗡𝗔𝗕𝗟𝗘𝗗**\n\n"
+            "✅ Quiz replies have been turned ON for this group.\n\n"
+            "🎉 Bot will now send congratulatory messages for correct answers.\n"
+            "😔 And failure messages for wrong answers.\n\n"
+            "🔕 Use /replyoff to disable replies.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"User {user.id} enabled replies in group {chat.id}")
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
