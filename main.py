@@ -1426,7 +1426,7 @@ Let's connect with Aman Directly, privately and securely!
                     if group_link:
                         text += f"{i}. [{chat.title}]({group_link}) (@{chat.username}) — 👥 {members_count} members\n"
                     else:
-                        text += f"{i}. {chat.title} (@{chat.userid}) — 👥 {members_count} members\n"
+                        text += f"{i}. {chat.title} (@{chat.username}) — 👥 {members_count} members\n"
             
                 except Exception as e:
                     text += f"{i}. ❌ Failed to fetch group info (ID: {group['id']})\n"
