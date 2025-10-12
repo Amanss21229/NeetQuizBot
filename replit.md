@@ -4,6 +4,12 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-10-12: Added reply toggle system for groups
+  - New commands: /replyoff and /replyon (admin/group admin only)
+  - Groups can disable/enable quiz reply messages independently
+  - Quiz scoring continues to work even when replies are disabled
+  - Admin permission check for both bot admins and group admins
+  - Database migration added for existing installations
 - 2025-10-12: Added custom reply management system
   - New admin commands: /addpositivereply, /addnegativereply, /removereply
   - Support for text and media replies (photos, videos, documents, stickers, audio, voice, GIFs)
@@ -36,6 +42,8 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - ✅ /promote - Promote user as bot admin
 - ✅ /remove - Remove user from bot admin list
 - ✅ /adminlist - Show all current bot admins
+- ✅ /replyoff - Disable quiz reply messages in a group (bot admin/group admin only)
+- ✅ /replyon - Enable quiz reply messages in a group (bot admin/group admin only)
 
 ### User Commands
 - ✅ /refresh - Reboot/refresh the bot
@@ -44,11 +52,13 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 
 ### Database Schema
 - **users**: User profiles with scoring statistics
-- **groups**: Active bot groups
+- **groups**: Active bot groups (with reply toggle support)
 - **admins**: Bot administrators
 - **quizzes**: Quiz questions and metadata
 - **user_quiz_scores**: Individual quiz responses and scores
 - **group_members**: Group membership tracking
+- **custom_replies**: Custom text and media replies
+- **quiz_solutions**: Quiz solutions storage
 
 ## Configuration
 - Bot Token: **REQUIRED** - Add your bot token from @BotFather as `BOT_TOKEN` secret
