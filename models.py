@@ -51,6 +51,7 @@ class Database:
                     type TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
                     replies_enabled BOOLEAN DEFAULT TRUE,
+                    language TEXT DEFAULT 'english',
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
@@ -65,6 +66,19 @@ class Database:
                         WHERE table_name='groups' AND column_name='replies_enabled'
                     ) THEN
                         ALTER TABLE groups ADD COLUMN replies_enabled BOOLEAN DEFAULT TRUE;
+                    END IF;
+                END $$;
+            """)
+            
+            # Migration: Add language column if it doesn't exist (for existing databases)
+            await conn.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='groups' AND column_name='language'
+                    ) THEN
+                        ALTER TABLE groups ADD COLUMN language TEXT DEFAULT 'english';
                     END IF;
                 END $$;
             """)
@@ -470,6 +484,26 @@ class Database:
                 SELECT replies_enabled FROM groups WHERE id = $1
             """, group_id)
             return result if result is not None else True
+    
+    async def set_group_language(self, group_id: int, language: str):
+        """Set language preference for a group"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE groups SET language = $2, updated_at = NOW()
+                WHERE id = $1
+            """, group_id, language.lower())
+    
+    async def get_group_language(self, group_id: int) -> str:
+        """Get language preference for a group"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("""
+                SELECT language FROM groups WHERE id = $1
+            """, group_id)
+            return result if result is not None else 'english'
 
 # Global database instance
 db = Database()
