@@ -32,7 +32,7 @@ from models import db
 # Add these imports (put them near the top with other imports)
 from flask import Flask
 import threading
-import requests
+import httpx
 
 
 # Bot configuration
@@ -216,21 +216,22 @@ WRONG_MESSAGES = [
 ]
 
 async def translate_to_hindi(text: str) -> str:
-    """Translate text to Hindi using MyMemory API"""
+    """Translate text to Hindi using MyMemory API with async HTTP"""
     try:
         url = "https://api.mymemory.translated.net/get"
         params = {
             'q': text,
             'langpair': 'en|hi'
         }
-        response = requests.get(url, params=params, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            translated_text = data.get('responseData', {}).get('translatedText', text)
-            return translated_text
-        else:
-            logger.warning(f"Translation failed with status {response.status_code}")
-            return text
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                translated_text = data.get('responseData', {}).get('translatedText', text)
+                return translated_text
+            else:
+                logger.warning(f"Translation failed with status {response.status_code}")
+                return text
     except Exception as e:
         logger.error(f"Translation error: {e}")
         return text
@@ -580,11 +581,45 @@ Let's ace NEET together! 🚀
             for group in groups:
                 if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
                     try:
+                        # Get group language preference
+                        group_language = await db.get_group_language(group['id'])
+                        
+                        # Prepare question and options
+                        quiz_question = poll.question
+                        quiz_options = options.copy()
+                        
+                        # Translate to Hindi if needed
+                        if group_language == 'hindi':
+                            logger.info(f"Translating quiz to Hindi for group {group['id']}")
+                            try:
+                                # Translate question and options in parallel for efficiency
+                                translation_tasks = [translate_to_hindi(poll.question)]
+                                translation_tasks.extend([translate_to_hindi(option) for option in options])
+                                
+                                translated_results = await asyncio.gather(*translation_tasks, return_exceptions=True)
+                                
+                                # Check for translation errors
+                                if any(isinstance(r, Exception) for r in translated_results):
+                                    logger.warning(f"Translation partially failed for group {group['id']}, using original text")
+                                    # Fallback to English on translation failure
+                                    quiz_question = poll.question
+                                    quiz_options = options.copy()
+                                else:
+                                    quiz_question = translated_results[0]
+                                    quiz_options = translated_results[1:]
+                                
+                                logger.info(f"Translation completed for group {group['id']}")
+                            except Exception as e:
+                                logger.error(f"Translation failed for group {group['id']}: {e}, using English")
+                                # Graceful degradation - use English if translation fails
+                                quiz_question = poll.question
+                                quiz_options = options.copy()
+                        
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
                             chat_id=group['id'],
-                            question=poll.question,
-                            options=options,
+                            question=quiz_question,
+                            options=quiz_options,
                             type='quiz',  # Always send as quiz for answer tracking
                             correct_option_id=correct_option,
                             is_anonymous=False,  # Critical: allows us to track user answers

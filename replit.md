@@ -4,6 +4,13 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-10-13: Added multi-language quiz support with Hindi translation
+  - New command: /language (admin/group admin only)
+  - Choose between English and Hindi for quiz questions
+  - Automatic translation using MyMemory API
+  - All features (scoring, leaderboard, points) work identically for both languages
+  - Translation applied to quiz questions and options before sending to groups
+  - Database schema updated with language preference column
 - 2025-10-12: Added reply toggle system for groups
   - New commands: /replyoff and /replyon (admin/group admin only)
   - Groups can disable/enable quiz reply messages independently
@@ -49,10 +56,13 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - ✅ /refresh - Reboot/refresh the bot
 - ✅ /donate - Donate via Telegram Stars
 - ✅ /developer - Meet the developer with inline button
+- ✅ /language - Choose quiz language (English/Hindi) - admin/group admin only
+- ✅ /leaderboard - Show group leaderboard
+- ✅ /sol - Show detailed solution for quiz
 
 ### Database Schema
 - **users**: User profiles with scoring statistics
-- **groups**: Active bot groups (with reply toggle support)
+- **groups**: Active bot groups (with reply toggle and language preference support)
 - **admins**: Bot administrators
 - **quizzes**: Quiz questions and metadata
 - **user_quiz_scores**: Individual quiz responses and scores
