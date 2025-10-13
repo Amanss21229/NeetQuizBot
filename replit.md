@@ -85,6 +85,7 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 
 ### Required Environment Variables
 - `BOT_TOKEN`: Your Telegram bot token from @BotFather
+- `MYMEMORY_API_KEY`: Your MyMemory translation API key (for Hindi translation feature)
 - `DATABASE_URL`: PostgreSQL database connection (automatically configured by Replit)
 - `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGHOST`: Database connection details (automatically configured)
 

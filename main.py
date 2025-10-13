@@ -223,6 +223,12 @@ async def translate_to_hindi(text: str) -> str:
             'q': text,
             'langpair': 'en|hi'
         }
+        
+        # Add API key if available for better rate limits
+        api_key = os.environ.get("MYMEMORY_API_KEY")
+        if api_key:
+            params['key'] = api_key
+        
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(url, params=params)
             if response.status_code == 200:
