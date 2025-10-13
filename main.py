@@ -32,6 +32,7 @@ from models import db
 # Add these imports (put them near the top with other imports)
 from flask import Flask
 import threading
+import requests
 
 
 # Bot configuration
@@ -214,6 +215,26 @@ WRONG_MESSAGES = [
     "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
 ]
 
+async def translate_to_hindi(text: str) -> str:
+    """Translate text to Hindi using MyMemory API"""
+    try:
+        url = "https://api.mymemory.translated.net/get"
+        params = {
+            'q': text,
+            'langpair': 'en|hi'
+        }
+        response = requests.get(url, params=params, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            translated_text = data.get('responseData', {}).get('translatedText', text)
+            return translated_text
+        else:
+            logger.warning(f"Translation failed with status {response.status_code}")
+            return text
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        return text
+
 class NEETQuizBot:
     def __init__(self):
         self.application = None
@@ -268,6 +289,7 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("developer", self.developer_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         self.application.add_handler(CommandHandler("sol", self.get_solution))
+        self.application.add_handler(CommandHandler("language", self.language_command))
       
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
@@ -311,6 +333,7 @@ class NEETQuizBot:
             BotCommand("developer", "Meet the developer"),
             BotCommand("leaderboard", "Show group leaderboard"),
             BotCommand("sol", "Show Detail Solution"),
+            BotCommand("language", "Choose quiz language"),
         ]
         
         admin_commands = [
@@ -1234,6 +1257,91 @@ Let's connect with Aman Directly, privately and securely!
                 parse_mode='Markdown'
             )
     
+    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /language command - allows admins and group admins to choose quiz language"""
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Only works in groups
+        if chat.type == 'private':
+            await update.message.reply_text(
+                "🌐 **Language Settings**\n\n"
+                "❌ This command only works in groups!\n"
+                "🔄 Please use this command in a group where you're an admin.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Check if user is bot admin or group admin
+        is_bot_admin = await db.is_admin(user.id)
+        is_group_admin = False
+        
+        try:
+            member = await context.bot.get_chat_member(chat.id, user.id)
+            is_group_admin = member.status in ['creator', 'administrator']
+        except:
+            pass
+        
+        if not is_bot_admin and not is_group_admin:
+            # Decorated access denied message
+            denied_text = """
+╔══════════════════════════════════╗
+║   🚫 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗗𝗘𝗡𝗜𝗘𝗗** 🚫   ║
+╚══════════════════════════════════╝
+
+❌ **Sorry, you don't have permission!**
+
+🔐 **This command is restricted to:**
+   👑 Group Administrators
+   🤖 Bot Admins
+
+💡 **Why?**
+   Language settings affect all group members, so only admins can change them.
+
+🆘 **Need help?**
+   Contact your group admin or bot owner.
+            """
+            await update.message.reply_text(denied_text, parse_mode='Markdown')
+            return
+        
+        # Get current language
+        current_lang = await db.get_group_language(chat.id)
+        current_display = "🇮🇳 Hindi" if current_lang == 'hindi' else "🇬🇧 English"
+        
+        # Create language selection keyboard
+        keyboard = [
+            [
+                InlineKeyboardButton("🇬🇧 English", callback_data=f"lang_english_{chat.id}"),
+                InlineKeyboardButton("🇮🇳 Hindi", callback_data=f"lang_hindi_{chat.id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        language_text = f"""
+╔══════════════════════════════════╗
+║  🌐 **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦** 🌐  ║
+╚══════════════════════════════════╝
+
+📍 **Current Language:** {current_display}
+
+🎯 **Choose Quiz Language:**
+Select the language in which you want to receive quiz questions.
+
+✨ **Features:**
+   ✅ All quiz questions will be in selected language
+   ✅ Scoring and leaderboard remain the same
+   ✅ All group features work identically
+   ✅ Change anytime you want
+
+👇 **Select your preferred language below:**
+        """
+        
+        await update.message.reply_text(
+            language_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /broadcast command (admin only)"""
         user = update.effective_user
@@ -1723,7 +1831,42 @@ Let's connect with Aman Directly, privately and securely!
         query = update.callback_query
         await query.answer()
         
-        # Handle any callback queries if needed
+        # Handle language selection
+        if query.data.startswith("lang_"):
+            parts = query.data.split("_")
+            language = parts[1]  # 'english' or 'hindi'
+            group_id = int(parts[2])
+            
+            # Update language in database
+            await db.set_group_language(group_id, language)
+            
+            # Send confirmation message
+            lang_display = "🇮🇳 Hindi" if language == 'hindi' else "🇬🇧 English"
+            confirmation_text = f"""
+╔══════════════════════════════════╗
+║  ✅ **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗** ✅  ║
+╚══════════════════════════════════╝
+
+🎉 **Language successfully changed to:** {lang_display}
+
+✨ **What's next:**
+   📚 All upcoming quizzes will be in {lang_display}
+   🏆 Leaderboard and scoring work the same
+   ⚡ No restart required - changes apply immediately
+   
+💡 **Tip:** You can change the language anytime using /language
+
+🚀 **Happy Learning!**
+            """
+            
+            await query.edit_message_text(
+                text=confirmation_text,
+                parse_mode='Markdown'
+            )
+            logger.info(f"Language changed to {language} for group {group_id}")
+            return
+        
+        # Handle any other callback queries if needed
         logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
