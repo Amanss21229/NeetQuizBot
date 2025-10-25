@@ -220,6 +220,7 @@ class NEETQuizBot:
         self.quiz_data = {}  # Store active quizzes
         self.poll_mapping = {}  # Store poll_id -> {quiz_id, group_id, message_id}
         self.quiz_mapping = {}  # {forwarded_message_id: quiz_id}
+        self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
     
     async def initialize(self):
         """Initialize the bot and database"""
@@ -283,7 +284,8 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("removereply", self.remove_reply_command))
         self.application.add_handler(CommandHandler("replyoff", self.replyoff_command))
         self.application.add_handler(CommandHandler("replyon", self.replyon_command))
-
+        self.application.add_handler(CommandHandler("emergencybroadcast", self.emergency_broadcast_command))
+        self.application.add_handler(CommandHandler("ebroadcast", self.emergency_broadcast_command))
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
@@ -396,8 +398,16 @@ Let's ace NEET together! 🚀
         """Automatically register any group where the bot sees activity"""
         chat = update.effective_chat
         if chat and chat.type in ["group", "supergroup"]:
-            await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
-
+            # Add to in-memory cache (works even if DB fails)
+            self.groups_cache[chat.id] = {
+                "title": chat.title or "Unknown Group",
+                "type": chat.type
+            }
+            # Try to add to database (may fail if DB is down)
+            try:
+                await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
+            except Exception as e:
+                logger.warning(f"Failed to add group to database: {e}")
     
     async def handle_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz messages from admin group"""
@@ -1274,6 +1284,75 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Broadcast error: {e}")
             await update.message.reply_text("❌ Error occurred during broadcast.")
+
+    async def emergency_broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database"""
+        user = update.effective_user
+    
+        # Hardcoded admin check (works even if DB is down)
+        EMERGENCY_ADMINS = [8147394357, 8162524828]  # ⬅️ APNE ADMIN IDs YAHAN DALO
+        if user.id not in EMERGENCY_ADMINS:
+            await update.message.reply_text("❌ You are not authorized to use this emergency command.")
+            return
+    
+        # Check if replying to a message
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to a message/media/poll/quiz to broadcast it.\n\n"
+                "⚠️ **Emergency Mode**: Using in-memory cache (works without database)"
+            )
+            return
+    
+        replied_message = update.message.reply_to_message
+    
+        try:
+            # Use in-memory cache instead of database
+            if not self.groups_cache:
+                await update.message.reply_text(
+                    "⚠️ **No groups in cache!**\n\n"
+                    "The bot needs to receive at least one message from each group to build the cache.\n"
+                    "If database is working, use /broadcast instead."
+                )
+                return
+        
+            broadcast_count = 0
+            failed_count = 0
+        
+            status_msg = await update.message.reply_text(
+                f"🔄 **Emergency Broadcast Started**\n\n"
+                f"📊 Groups in cache: {len(self.groups_cache)}\n"
+                f"⏳ Sending messages..."
+            )
+        
+            # Broadcast to all groups in cache
+            for group_id, group_info in self.groups_cache.items():
+                try:
+                    await context.bot.copy_message(
+                        chat_id=group_id,
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    broadcast_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to emergency broadcast to group {group_id}: {e}")
+                    failed_count += 1
+        
+            # Update status
+            await status_msg.edit_text(
+                f"✅ **Emergency Broadcast Complete!**\n\n"
+                f"📊 **Statistics:**\n"
+                f"   ✅ Successful: {broadcast_count}\n"
+                f"   ❌ Failed: {failed_count}\n"
+                f"   📝 Total groups in cache: {len(self.groups_cache)}\n\n"
+                f"⚠️ **Note:** This used in-memory cache (no database required)"
+            )
+        
+        except Exception as e:
+            logger.error(f"Emergency broadcast error: {e}")
+            await update.message.reply_text(
+                f"❌ **Emergency broadcast failed!**\n\n"
+                f"Error: {str(e)}"
+            )
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /stats command (admin only)"""
