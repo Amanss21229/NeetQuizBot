@@ -213,6 +213,24 @@ WRONG_MESSAGES = [
     "😒 Galat jawaab, or karo babu sona🤧! -1 point",
     "😶 wrong Answer, btw tum to whi ho na jo tg pe padhne aaye the or study partner dhundne lage🤣! -1 point",
     "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
+    "😒 kaua udd, chirya udd, padhai udd🙂 Udd gai na padhai🥲 Galat jawaab🤧! -1 point",
+    "😒 Keh do ki Tum meri ho warna😉 jeena nhi mujhe hai padhna😅🤣! -1 point",
+    "😒 hurr🤧! -1 point",
+    "😒 Tum whi ho na jo Galat jawab deke bolte ho, im joking yaar🤧 mujhe aata tha iska answer😅🤣! -1 point",
+    "🤭 Laal Phool, Neela Phool🙂 tum to nikle beautifool😜! -1 point",
+    "🤐 Galat jawaab, padhle yaara masti me, nhi to saadi hogi chhoti basti me👀! -1 point",
+    "🥲 Galat jawaab, Bolo Pencil🙂are bolo yaara bcz tumhaare answer dekh ke tumhaara bf/gf tumse yhi bolega🥲! -1 point",
+    "😒 Galat jawaab, htt burwakwa eho nai aabo hai🤧! -1 point",
+    "😐 Galat jawaab, Inqalab zindabaat,✊️ padhai teri jaise jhinga bhaat🤡! -1 point",
+    "😒 Galat jawaab, kuchh na kho,🥰👀 or jaake padhai karo😂! -1 point",
+    "😒 Galat jawaab, Tum To Dhokebaaz ho😒, Mujhe sb aata hai ye bolke, answer galat kar dete ho.☹️ Roj Roj Tum jo sansam aisa karoge😕😣, yaad rakhna neet exam me haath maloge🥲😅! -1 point",
+    "😶 Galat jawaab, saas, bahu, Saazish dekhne se achha hai, practice practiceor sirf practicepe dhyaan do😄! -1 point",
+    "😐 Galat jawaab, oh Nora Fateh ke Dewaane🤪, padh le yaar😅! -1 point",
+    "🙃 Galat jawaab, or karo babu sona🤧! -1 point",
+    "😏 Galat jawaab, Anupma Hi dekhte rho tum😮‍💨,Tumhaare bade padhai v anupma hi kar legi🥱! -1 point",
+    "🤨 Galat jawaab, Agr padhna hai to chrome ka use thora kam kar do bhai☻️, dekho teachers ne kitne achhe achhe app laaye hai jaise pw, unacademy,  allen, motion wo sb dekho.🙂 -1 point",
+    "🤧 Galat jawaab, kumkum bhaag dekh ke rone se achha hai neet nikaalke haso yaara😁! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point"
 ]
 
 async def translate_to_hindi(text: str) -> str:
