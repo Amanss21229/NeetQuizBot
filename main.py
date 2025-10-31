@@ -230,6 +230,7 @@ WRONG_MESSAGES = [
     "😏 Galat jawaab, Anupma Hi dekhte rho tum😮‍💨,Tumhaare bade padhai v anupma hi kar legi🥱! -1 point",
     "🤨 Galat jawaab, Agr padhna hai to chrome ka use thora kam kar do bhai☻️, dekho teachers ne kitne achhe achhe app laaye hai jaise pw, unacademy,  allen, motion wo sb dekho.🙂 -1 point",
     "🤧 Galat jawaab, kumkum bhaag dekh ke rone se achha hai neet nikaalke haso yaara😁! -1 point",
+    "🤨 Galat jawaab, Ab mai kuchh bolunga, to bologe Aji gaali deta hai😏🤣 ",
     "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point"
 ]
 
