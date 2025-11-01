@@ -145,6 +145,7 @@ WRONG_MESSAGES = [
     "🤕 Thoda aur mehnat! -1 point",
     "🥲 kyu nhi ho rhi padhai! -1 point",
     "🤒 Dekha Laparwaahi ka naatiza! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😏 wrong! Waah bete, padhai chhodo aur tinder join kar lo! -1 point",
     "😂 wrong Answer! Itna confidence galat answer me? Mazza aa gya! -1 point",
     "🤦 NEET dene aaye ho ya Splitsvilla audition?, Galat hai ye Answer! -1 point",
@@ -155,6 +156,7 @@ WRONG_MESSAGES = [
     "🐒 Lagta hai dimaag exam ke bajaye crush pe atka hua hai. Beta! -1 point",
     "💀 Ye answer dekh ke mummy bolegi: ‘Doctor banna hai ya stand-up comedian?’! -1 point",
     "😜 Sahi answer chhod ke galat pe gaye… just like tumhare pichhle relationship me! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "🤡 Tumhare option dekh ke lagta hai NCERT tumse personal dushmani rakhti hai! -1 point",
     "🫢 Acha hua NEET single choice hai, warna tum 4 me se 5 option tick kar dete! -1 point",
     "🤭 Tumhe dekh ke lagta hai MCQ ka matlab hai ‘Mere Confused Questions’! -1 point",
@@ -163,6 +165,7 @@ WRONG_MESSAGES = [
     "🐔 Lagta hai option choose karte waqt ‘Inky Pinky Ponky’ chal raha tha! -1 point",
     "😏 Answer kaha se shi hoga, Tum to poora din Telegram pe oo ji aho ji karte rehte ho😂! -1 point",
     "🤣 Aapka jawaab galat hai… lekin attitude ekdum topper jaisa! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😈 Doctor banna hai ya Crush ka personal chemist?! -1 point",
     "🥲 Tumhara galat answer bhi itna confident tha ki mujhe doubt ho gaya! -1 point",
     "😂 Tumhare galat answer dekh ke Munna Bhai MBBS bhi shock ho gaya! -1 point",
@@ -220,6 +223,7 @@ WRONG_MESSAGES = [
     "🤭 Laal Phool, Neela Phool🙂 tum to nikle beautifool😜! -1 point",
     "🤐 Galat jawaab, padhle yaara masti me, nhi to saadi hogi chhoti basti me👀! -1 point",
     "🥲 Galat jawaab, Bolo Pencil🙂are bolo yaara bcz tumhaare answer dekh ke tumhaara bf/gf tumse yhi bolega🥲! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😒 Galat jawaab, htt burwakwa eho nai aabo hai🤧! -1 point",
     "😐 Galat jawaab, Inqalab zindabaat,✊️ padhai teri jaise jhinga bhaat🤡! -1 point",
     "😒 Galat jawaab, kuchh na kho,🥰👀 or jaake padhai karo😂! -1 point",
@@ -231,6 +235,8 @@ WRONG_MESSAGES = [
     "🤨 Galat jawaab, Agr padhna hai to chrome ka use thora kam kar do bhai☻️, dekho teachers ne kitne achhe achhe app laaye hai jaise pw, unacademy,  allen, motion wo sb dekho.🙂 -1 point",
     "🤧 Galat jawaab, kumkum bhaag dekh ke rone se achha hai neet nikaalke haso yaara😁! -1 point",
     "🤨 Galat jawaab, Ab mai kuchh bolunga, to bologe Aji gaali deta hai😏🤣 ",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
+    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point"
 ]
 
