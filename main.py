@@ -280,6 +280,30 @@ class NEETQuizBot:
             days=(6,),  # Sunday (0=Monday, 6=Sunday)
             name="weekly_reset"
         )
+
+        # New member handler
+        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    
+        # Message forwarding system: User -> Admin
+        # Forward all non-command messages from private chats to admin group
+        application.add_handler(
+            MessageHandler(
+                filters.ChatType.PRIVATE & ~filters.COMMAND,
+                forward_user_message_to_admin
+            ),
+            group=0
+        )
+    
+        # Message forwarding system: Admin -> User
+        # Handle admin replies in admin group and send them to users
+        ADMIN_GROUP_ID = -1002796976762
+        application.add_handler(
+            MessageHandler(
+                filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY,
+                handle_admin_reply
+            ),
+            group=0
+        )
     
     def _register_handlers(self):
         """Register all bot handlers"""
@@ -1927,7 +1951,152 @@ Let's connect with Aman Directly, privately and securely!
             
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
+
+        """Forward any user message from private chat to admin group."""
+    ADMIN_GROUP_ID = -1002796976762
     
+    try:
+        # Only handle messages from private chats
+        if update.effective_chat.type != 'private':
+            return
+        
+        # Skip if no message or no user
+        if not update.message or not update.effective_user:
+            return
+        
+        # Skip commands (they are handled by command handlers)
+        if update.message.text and update.message.text.startswith('/'):
+            return
+        
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.first_name
+        username = f"@{user.username}" if user.username else "No username"
+        
+        # Create header message
+        header = (
+            f"📨 **New Message from User**\n\n"
+            f"👤 Name: {user_name}\n"
+            f"🆔 User ID: `{user_id}`\n"
+            f"📛 Username: {username}\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+        
+        # Send header to admin group
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=header
+        )
+        
+        # Forward the actual message to admin group
+        forwarded = await update.message.forward(ADMIN_GROUP_ID)
+        
+        # Store mapping of forwarded message to user for replies
+        # Format: {forwarded_message_id: user_id}
+        if 'message_mapping' not in context.bot_data:
+            context.bot_data['message_mapping'] = {}
+        
+        context.bot_data['message_mapping'][forwarded.message_id] = user_id
+        
+        logger.info(f"Forwarded message from user {user_id} to admin group. Stored mapping: {forwarded.message_id} -> {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Error forwarding message to admin: {e}", exc_info=True)
+
+    async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle admin replies in admin group and send them back to users."""
+        ADMIN_GROUP_ID = -1002796976762
+    
+        try:
+            # Only handle messages from admin group
+            if update.effective_chat.id != ADMIN_GROUP_ID:
+                return
+        
+            # Check if this is a reply to a message
+            if not update.message or not update.message.reply_to_message:
+                return
+        
+            # Get the message being replied to
+            replied_to_message_id = update.message.reply_to_message.message_id
+        
+            # Check if we have a mapping for this message
+            if 'message_mapping' not in context.bot_data:
+                return
+        
+            message_mapping = context.bot_data['message_mapping']
+        
+            if replied_to_message_id not in message_mapping:
+                # Not a forwarded user message, ignore
+                return
+        
+            # Get the original user ID
+            user_id = message_mapping[replied_to_message_id]
+        
+            logger.info(f"Admin replied to message {replied_to_message_id}. Sending reply to user {user_id}")
+        
+            # Send the admin's message to the user
+            if update.message.text:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=update.message.text
+                )
+            elif update.message.photo:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=update.message.photo[-1].file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.video:
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=update.message.video.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.document:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=update.message.document.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.audio:
+                await context.bot.send_audio(
+                    chat_id=user_id,
+                    audio=update.message.audio.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.voice:
+                await context.bot.send_voice(
+                    chat_id=user_id,
+                    voice=update.message.voice.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.sticker:
+                await context.bot.send_sticker(
+                    chat_id=user_id,
+                    sticker=update.message.sticker.file_id
+                )
+            elif update.message.animation:
+                    await context.bot.send_animation(
+                        chat_id=user_id,
+                        animation=update.message.animation.file_id,
+                        caption=update.message.caption
+                    )
+            else:
+                # Copy the message as-is if it's something else
+                await update.message.copy(chat_id=user_id)
+        
+            logger.info(f"Successfully sent admin reply to user {user_id}")
+        
+            # React to admin's message to confirm it was sent
+            await update.message.reply_text("✅ Message sent to user!")
+        
+        except Exception as e:
+            logger.error(f"Error handling admin reply: {e}", exc_info=True)
+            try:
+                await update.message.reply_text(f"❌ Error sending message to user: {str(e)}")
+                except:
+                    pass
+
     async def run(self):
         """Run the bot"""
         try:
