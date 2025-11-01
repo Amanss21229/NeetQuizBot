@@ -1959,7 +1959,7 @@ Let's connect with Aman Directly, privately and securely!
         # Only handle messages from private chats
         if update.effective_chat.type != 'private':
             return
-        
+            
         # Skip if no message or no user
         if not update.message or not update.effective_user:
             return
