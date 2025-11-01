@@ -2095,7 +2095,7 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Error handling admin reply: {e}", exc_info=True)
             try:
                 await update.message.reply_text(f"❌ Error sending message to user: {str(e)}")
-             except:
+            except:
                 pass
 
     async def run(self):
