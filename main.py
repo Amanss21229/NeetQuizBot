@@ -1952,57 +1952,58 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
 
+    async def forward_user_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Forward any user message from private chat to admin group."""
-    ADMIN_GROUP_ID = -1002796976762
+        ADMIN_GROUP_ID = -1002796976762
     
-    try:
-        # Only handle messages from private chats
-        if update.effective_chat.type != 'private':
-            return
-            
-        # Skip if no message or no user
-        if not update.message or not update.effective_user:
-            return
+        try:
+            # Only handle messages from private chats
+            if update.effective_chat.type != 'private':
+                return
         
-        # Skip commands (they are handled by command handlers)
-        if update.message.text and update.message.text.startswith('/'):
-            return
+            # Skip if no message or no user
+            if not update.message or not update.effective_user:
+                return
         
-        user = update.effective_user
-        user_id = user.id
-        user_name = user.first_name
-        username = f"@{user.username}" if user.username else "No username"
+            # Skip commands (they are handled by command handlers)
+            if update.message.text and update.message.text.startswith('/'):
+                return
         
-        # Create header message
-        header = (
-            f"📨 **New Message from User**\n\n"
-            f"👤 Name: {user_name}\n"
-            f"🆔 User ID: `{user_id}`\n"
-            f"📛 Username: {username}\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
+            user = update.effective_user
+            user_id = user.id
+            user_name = user.first_name
+            username = f"@{user.username}" if user.username else "No username"
         
-        # Send header to admin group
-        await context.bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=header
-        )
+            # Create header message
+            header = (
+                f"📨 **New Message from User**\n\n"
+                f"👤 Name: {user_name}\n"
+                f"🆔 User ID: `{user_id}`\n"
+                f"📛 Username: {username}\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
+            )
         
-        # Forward the actual message to admin group
-        forwarded = await update.message.forward(ADMIN_GROUP_ID)
+            # Send header to admin group
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=header
+            )
         
-        # Store mapping of forwarded message to user for replies
-        # Format: {forwarded_message_id: user_id}
-        if 'message_mapping' not in context.bot_data:
-            context.bot_data['message_mapping'] = {}
+            # Forward the actual message to admin group
+            forwarded = await update.message.forward(ADMIN_GROUP_ID)
         
-        context.bot_data['message_mapping'][forwarded.message_id] = user_id
+            # Store mapping of forwarded message to user for replies
+            # Format: {forwarded_message_id: user_id}
+            if 'message_mapping' not in context.bot_data:
+                context.bot_data['message_mapping'] = {}
         
-        logger.info(f"Forwarded message from user {user_id} to admin group. Stored mapping: {forwarded.message_id} -> {user_id}")
+            context.bot_data['message_mapping'][forwarded.message_id] = user_id
         
-    except Exception as e:
-        logger.error(f"Error forwarding message to admin: {e}", exc_info=True)
-
+            logger.info(f"Forwarded message from user {user_id} to admin group. Stored mapping: {forwarded.message_id} -> {user_id}")
+        
+        except Exception as e:
+            logger.error(f"Error forwarding message to admin: {e}", exc_info=True)        
+        
     async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle admin replies in admin group and send them back to users."""
         ADMIN_GROUP_ID = -1002796976762
@@ -2076,11 +2077,11 @@ Let's connect with Aman Directly, privately and securely!
                     sticker=update.message.sticker.file_id
                 )
             elif update.message.animation:
-                    await context.bot.send_animation(
-                        chat_id=user_id,
-                        animation=update.message.animation.file_id,
-                        caption=update.message.caption
-                    )
+                await context.bot.send_animation(
+                    chat_id=user_id,
+                    animation=update.message.animation.file_id,
+                    caption=update.message.caption
+                )
             else:
                 # Copy the message as-is if it's something else
                 await update.message.copy(chat_id=user_id)
@@ -2090,12 +2091,12 @@ Let's connect with Aman Directly, privately and securely!
             # React to admin's message to confirm it was sent
             await update.message.reply_text("✅ Message sent to user!")
         
-        except Exception as e:
-            logger.error(f"Error handling admin reply: {e}", exc_info=True)
-            try:
-                await update.message.reply_text(f"❌ Error sending message to user: {str(e)}")
-            except:
-                pass
+     except Exception as e:
+        logger.error(f"Error handling admin reply: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(f"❌ Error sending message to user: {str(e)}")
+        except:
+            pass
 
     async def run(self):
         """Run the bot"""
