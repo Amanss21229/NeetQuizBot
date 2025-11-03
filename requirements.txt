@@ -34,3 +34,7 @@ telegram
 asyncpg
 python-telegram-bot
 pytz
+asyncpg
+flask
+python-telegram-bot
+pytz
