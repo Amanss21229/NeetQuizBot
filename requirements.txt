@@ -34,8 +34,3 @@ telegram
 asyncpg
 python-telegram-bot
 pytz
-asyncpg
-python-telegram-bot
-pytz
-requests
-schedule
