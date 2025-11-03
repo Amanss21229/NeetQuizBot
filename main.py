@@ -38,7 +38,7 @@ import threading
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required. Please set it with your bot token from @BotFather")
-ADMIN_GROUP_ID = -1003009412065
+ADMIN_GROUP_ID = -1003049872361
 TIMEZONE = pytz.timezone('Asia/Kolkata')
 
 # Configure logging
