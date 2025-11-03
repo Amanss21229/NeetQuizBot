@@ -281,29 +281,6 @@ class NEETQuizBot:
             name="weekly_reset"
         )
 
-        # New member handler
-        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-    
-        # Message forwarding system: User -> Admin
-        # Forward all non-command messages from private chats to admin group
-        application.add_handler(
-            MessageHandler(
-                filters.ChatType.PRIVATE & ~filters.COMMAND,
-                forward_user_message_to_admin
-            ),
-            group=0
-        )
-    
-        # Message forwarding system: Admin -> User
-        # Handle admin replies in admin group and send them to users
-        ADMIN_GROUP_ID = -1002796976762
-        application.add_handler(
-            MessageHandler(
-                filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY,
-                handle_admin_reply
-            ),
-            group=0
-        )
     
     def _register_handlers(self):
         """Register all bot handlers"""
@@ -348,6 +325,26 @@ class NEETQuizBot:
         
         # Track any group where bot sees activity
         self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
+        
+        # Message forwarding system: User -> Admin
+        # Forward all non-command messages from private chats to admin group  
+        self.application.add_handler(
+            MessageHandler(
+                filters.ChatType.PRIVATE & ~filters.COMMAND,
+                self.forward_user_message_to_admin
+            ),
+            group=1
+        )
+        
+        # Message forwarding system: Admin -> User
+        # Handle admin replies in admin group and send them to users
+        self.application.add_handler(
+            MessageHandler(
+                filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY,
+                self.handle_admin_reply
+            ),
+            group=1
+        )
  
     async def _set_bot_commands(self):
         """Set bot commands menu"""
@@ -1952,10 +1949,8 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
 
-    async def forward_user_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def forward_user_message_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Forward any user message from private chat to admin group."""
-        ADMIN_GROUP_ID = -1002796976762
-    
         try:
             # Only handle messages from private chats
             if update.effective_chat.type != 'private':
@@ -1986,28 +1981,23 @@ Let's connect with Aman Directly, privately and securely!
             # Send header to admin group
             await context.bot.send_message(
                 chat_id=ADMIN_GROUP_ID,
-                text=header
+                text=header,
+                parse_mode='Markdown'
             )
         
             # Forward the actual message to admin group
             forwarded = await update.message.forward(ADMIN_GROUP_ID)
         
-            # Store mapping of forwarded message to user for replies
-            # Format: {forwarded_message_id: user_id}
-            if 'message_mapping' not in context.bot_data:
-                context.bot_data['message_mapping'] = {}
-        
-            context.bot_data['message_mapping'][forwarded.message_id] = user_id
+            # Store mapping of forwarded message to user in database
+            await db.store_message_mapping(forwarded.message_id, user_id)
         
             logger.info(f"Forwarded message from user {user_id} to admin group. Stored mapping: {forwarded.message_id} -> {user_id}")
         
         except Exception as e:
             logger.error(f"Error forwarding message to admin: {e}", exc_info=True)        
         
-    async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_admin_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle admin replies in admin group and send them back to users."""
-        ADMIN_GROUP_ID = -1002796976762
-    
         try:
             # Only handle messages from admin group
             if update.effective_chat.id != ADMIN_GROUP_ID:
@@ -2020,18 +2010,12 @@ Let's connect with Aman Directly, privately and securely!
             # Get the message being replied to
             replied_to_message_id = update.message.reply_to_message.message_id
         
-            # Check if we have a mapping for this message
-            if 'message_mapping' not in context.bot_data:
-                return
-        
-            message_mapping = context.bot_data['message_mapping']
-        
-            if replied_to_message_id not in message_mapping:
+            # Check if we have a mapping for this message in database
+            user_id = await db.get_user_from_message(replied_to_message_id)
+            
+            if not user_id:
                 # Not a forwarded user message, ignore
                 return
-        
-            # Get the original user ID
-            user_id = message_mapping[replied_to_message_id]
         
             logger.info(f"Admin replied to message {replied_to_message_id}. Sending reply to user {user_id}")
         

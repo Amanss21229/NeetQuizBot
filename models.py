@@ -150,6 +150,15 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            
+            # Message Mapping table for user-admin communication
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_mapping (
+                    forwarded_message_id BIGINT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
@@ -470,6 +479,27 @@ class Database:
                 SELECT replies_enabled FROM groups WHERE id = $1
             """, group_id)
             return result if result is not None else True
+    
+    async def store_message_mapping(self, forwarded_message_id: int, user_id: int):
+        """Store mapping of forwarded message to user"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO message_mapping (forwarded_message_id, user_id)
+                VALUES ($1, $2)
+                ON CONFLICT (forwarded_message_id) DO UPDATE SET user_id = $2
+            """, forwarded_message_id, user_id)
+    
+    async def get_user_from_message(self, forwarded_message_id: int) -> Optional[int]:
+        """Get user_id from forwarded message ID"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("""
+                SELECT user_id FROM message_mapping WHERE forwarded_message_id = $1
+            """, forwarded_message_id)
+            return result
 
 # Global database instance
 db = Database()
