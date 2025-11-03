@@ -32,7 +32,6 @@ from models import db
 # Add these imports (put them near the top with other imports)
 from flask import Flask
 import threading
-import httpx
 
 
 # Bot configuration
@@ -145,7 +144,6 @@ WRONG_MESSAGES = [
     "🤕 Thoda aur mehnat! -1 point",
     "🥲 kyu nhi ho rhi padhai! -1 point",
     "🤒 Dekha Laparwaahi ka naatiza! -1 point",
-    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😏 wrong! Waah bete, padhai chhodo aur tinder join kar lo! -1 point",
     "😂 wrong Answer! Itna confidence galat answer me? Mazza aa gya! -1 point",
     "🤦 NEET dene aaye ho ya Splitsvilla audition?, Galat hai ye Answer! -1 point",
@@ -156,7 +154,6 @@ WRONG_MESSAGES = [
     "🐒 Lagta hai dimaag exam ke bajaye crush pe atka hua hai. Beta! -1 point",
     "💀 Ye answer dekh ke mummy bolegi: ‘Doctor banna hai ya stand-up comedian?’! -1 point",
     "😜 Sahi answer chhod ke galat pe gaye… just like tumhare pichhle relationship me! -1 point",
-    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "🤡 Tumhare option dekh ke lagta hai NCERT tumse personal dushmani rakhti hai! -1 point",
     "🫢 Acha hua NEET single choice hai, warna tum 4 me se 5 option tick kar dete! -1 point",
     "🤭 Tumhe dekh ke lagta hai MCQ ka matlab hai ‘Mere Confused Questions’! -1 point",
@@ -165,7 +162,6 @@ WRONG_MESSAGES = [
     "🐔 Lagta hai option choose karte waqt ‘Inky Pinky Ponky’ chal raha tha! -1 point",
     "😏 Answer kaha se shi hoga, Tum to poora din Telegram pe oo ji aho ji karte rehte ho😂! -1 point",
     "🤣 Aapka jawaab galat hai… lekin attitude ekdum topper jaisa! -1 point",
-    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😈 Doctor banna hai ya Crush ka personal chemist?! -1 point",
     "🥲 Tumhara galat answer bhi itna confident tha ki mujhe doubt ho gaya! -1 point",
     "😂 Tumhare galat answer dekh ke Munna Bhai MBBS bhi shock ho gaya! -1 point",
@@ -215,7 +211,6 @@ WRONG_MESSAGES = [
     "👀 jb laiki se dhyaan hatega tabhi to answer shi hoga☻️! -1 point",
     "😒 Galat jawaab, or karo babu sona🤧! -1 point",
     "😶 wrong Answer, btw tum to whi ho na jo tg pe padhne aaye the or study partner dhundne lage🤣! -1 point",
-    "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
     "😒 kaua udd, chirya udd, padhai udd🙂 Udd gai na padhai🥲 Galat jawaab🤧! -1 point",
     "😒 Keh do ki Tum meri ho warna😉 jeena nhi mujhe hai padhna😅🤣! -1 point",
     "😒 hurr🤧! -1 point",
@@ -237,35 +232,8 @@ WRONG_MESSAGES = [
     "🤨 Galat jawaab, Ab mai kuchh bolunga, to bologe Aji gaali deta hai😏🤣 ",
     "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
     "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point",
-    "😕 Galat jawaab, waise yaara maine suna hu ki tum🤭 chhoro jaane do mai nhi bolunga.😁 menu saram aati hai☺️! -1 point"
+    "😮‍💨 Wrong answer, waise wo tum hi ho na jo Har group me 'i need study partner' message karta hai😂! -1 point" 
 ]
-
-async def translate_to_hindi(text: str) -> str:
-    """Translate text to Hindi using MyMemory API with async HTTP"""
-    try:
-        url = "https://api.mymemory.translated.net/get"
-        params = {
-            'q': text,
-            'langpair': 'en|hi'
-        }
-        
-        # Add API key if available for better rate limits
-        api_key = os.environ.get("MYMEMORY_API_KEY")
-        if api_key:
-            params['key'] = api_key
-        
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(url, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                translated_text = data.get('responseData', {}).get('translatedText', text)
-                return translated_text
-            else:
-                logger.warning(f"Translation failed with status {response.status_code}")
-                return text
-    except Exception as e:
-        logger.error(f"Translation error: {e}")
-        return text
 
 class NEETQuizBot:
     def __init__(self):
@@ -273,6 +241,7 @@ class NEETQuizBot:
         self.quiz_data = {}  # Store active quizzes
         self.poll_mapping = {}  # Store poll_id -> {quiz_id, group_id, message_id}
         self.quiz_mapping = {}  # {forwarded_message_id: quiz_id}
+        self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
     
     async def initialize(self):
         """Initialize the bot and database"""
@@ -311,6 +280,30 @@ class NEETQuizBot:
             days=(6,),  # Sunday (0=Monday, 6=Sunday)
             name="weekly_reset"
         )
+
+        # New member handler
+        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    
+        # Message forwarding system: User -> Admin
+        # Forward all non-command messages from private chats to admin group
+        application.add_handler(
+            MessageHandler(
+                filters.ChatType.PRIVATE & ~filters.COMMAND,
+                forward_user_message_to_admin
+            ),
+            group=0
+        )
+    
+        # Message forwarding system: Admin -> User
+        # Handle admin replies in admin group and send them to users
+        ADMIN_GROUP_ID = -1002796976762
+        application.add_handler(
+            MessageHandler(
+                filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY,
+                handle_admin_reply
+            ),
+            group=0
+        )
     
     def _register_handlers(self):
         """Register all bot handlers"""
@@ -321,7 +314,6 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("developer", self.developer_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         self.application.add_handler(CommandHandler("sol", self.get_solution))
-        self.application.add_handler(CommandHandler("language", self.language_command))
       
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
@@ -337,7 +329,8 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("removereply", self.remove_reply_command))
         self.application.add_handler(CommandHandler("replyoff", self.replyoff_command))
         self.application.add_handler(CommandHandler("replyon", self.replyon_command))
-
+        self.application.add_handler(CommandHandler("emergencybroadcast", self.emergency_broadcast_command))
+        self.application.add_handler(CommandHandler("ebroadcast", self.emergency_broadcast_command))
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
@@ -365,7 +358,6 @@ class NEETQuizBot:
             BotCommand("developer", "Meet the developer"),
             BotCommand("leaderboard", "Show group leaderboard"),
             BotCommand("sol", "Show Detail Solution"),
-            BotCommand("language", "Choose quiz language"),
         ]
         
         admin_commands = [
@@ -451,8 +443,16 @@ Let's ace NEET together! 🚀
         """Automatically register any group where the bot sees activity"""
         chat = update.effective_chat
         if chat and chat.type in ["group", "supergroup"]:
-            await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
-
+            # Add to in-memory cache (works even if DB fails)
+            self.groups_cache[chat.id] = {
+                "title": chat.title or "Unknown Group",
+                "type": chat.type
+            }
+            # Try to add to database (may fail if DB is down)
+            try:
+                await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
+            except Exception as e:
+                logger.warning(f"Failed to add group to database: {e}")
     
     async def handle_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz messages from admin group"""
@@ -612,45 +612,11 @@ Let's ace NEET together! 🚀
             for group in groups:
                 if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
                     try:
-                        # Get group language preference
-                        group_language = await db.get_group_language(group['id'])
-                        
-                        # Prepare question and options
-                        quiz_question = poll.question
-                        quiz_options = options.copy()
-                        
-                        # Translate to Hindi if needed
-                        if group_language == 'hindi':
-                            logger.info(f"Translating quiz to Hindi for group {group['id']}")
-                            try:
-                                # Translate question and options in parallel for efficiency
-                                translation_tasks = [translate_to_hindi(poll.question)]
-                                translation_tasks.extend([translate_to_hindi(option) for option in options])
-                                
-                                translated_results = await asyncio.gather(*translation_tasks, return_exceptions=True)
-                                
-                                # Check for translation errors
-                                if any(isinstance(r, Exception) for r in translated_results):
-                                    logger.warning(f"Translation partially failed for group {group['id']}, using original text")
-                                    # Fallback to English on translation failure
-                                    quiz_question = poll.question
-                                    quiz_options = options.copy()
-                                else:
-                                    quiz_question = translated_results[0]
-                                    quiz_options = translated_results[1:]
-                                
-                                logger.info(f"Translation completed for group {group['id']}")
-                            except Exception as e:
-                                logger.error(f"Translation failed for group {group['id']}: {e}, using English")
-                                # Graceful degradation - use English if translation fails
-                                quiz_question = poll.question
-                                quiz_options = options.copy()
-                        
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
                             chat_id=group['id'],
-                            question=quiz_question,
-                            options=quiz_options,
+                            question=poll.question,
+                            options=options,
                             type='quiz',  # Always send as quiz for answer tracking
                             correct_option_id=correct_option,
                             is_anonymous=False,  # Critical: allows us to track user answers
@@ -1323,91 +1289,6 @@ Let's connect with Aman Directly, privately and securely!
                 parse_mode='Markdown'
             )
     
-    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /language command - allows admins and group admins to choose quiz language"""
-        user = update.effective_user
-        chat = update.effective_chat
-        
-        # Only works in groups
-        if chat.type == 'private':
-            await update.message.reply_text(
-                "🌐 **Language Settings**\n\n"
-                "❌ This command only works in groups!\n"
-                "🔄 Please use this command in a group where you're an admin.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Check if user is bot admin or group admin
-        is_bot_admin = await db.is_admin(user.id)
-        is_group_admin = False
-        
-        try:
-            member = await context.bot.get_chat_member(chat.id, user.id)
-            is_group_admin = member.status in ['creator', 'administrator']
-        except:
-            pass
-        
-        if not is_bot_admin and not is_group_admin:
-            # Decorated access denied message
-            denied_text = """
-╔══════════════════════════════════╗
-║   🚫 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗗𝗘𝗡𝗜𝗘𝗗** 🚫   ║
-╚══════════════════════════════════╝
-
-❌ **Sorry, you don't have permission!**
-
-🔐 **This command is restricted to:**
-   👑 Group Administrators
-   🤖 Bot Admins
-
-💡 **Why?**
-   Language settings affect all group members, so only admins can change them.
-
-🆘 **Need help?**
-   Contact your group admin or bot owner.
-            """
-            await update.message.reply_text(denied_text, parse_mode='Markdown')
-            return
-        
-        # Get current language
-        current_lang = await db.get_group_language(chat.id)
-        current_display = "🇮🇳 Hindi" if current_lang == 'hindi' else "🇬🇧 English"
-        
-        # Create language selection keyboard
-        keyboard = [
-            [
-                InlineKeyboardButton("🇬🇧 English", callback_data=f"lang_english_{chat.id}"),
-                InlineKeyboardButton("🇮🇳 Hindi", callback_data=f"lang_hindi_{chat.id}")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        language_text = f"""
-╔══════════════════════════════════╗
-║  🌐 **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗦𝗘𝗧𝗧𝗜𝗡𝗚𝗦** 🌐  ║
-╚══════════════════════════════════╝
-
-📍 **Current Language:** {current_display}
-
-🎯 **Choose Quiz Language:**
-Select the language in which you want to receive quiz questions.
-
-✨ **Features:**
-   ✅ All quiz questions will be in selected language
-   ✅ Scoring and leaderboard remain the same
-   ✅ All group features work identically
-   ✅ Change anytime you want
-
-👇 **Select your preferred language below:**
-        """
-        
-        await update.message.reply_text(
-            language_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-    
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /broadcast command (admin only)"""
         user = update.effective_user
@@ -1448,6 +1329,75 @@ Select the language in which you want to receive quiz questions.
         except Exception as e:
             logger.error(f"Broadcast error: {e}")
             await update.message.reply_text("❌ Error occurred during broadcast.")
+
+    async def emergency_broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database"""
+        user = update.effective_user
+    
+        # Hardcoded admin check (works even if DB is down)
+        EMERGENCY_ADMINS = [8147394357, 8162524828]  # ⬅️ APNE ADMIN IDs YAHAN DALO
+        if user.id not in EMERGENCY_ADMINS:
+            await update.message.reply_text("❌ You are not authorized to use this emergency command.")
+            return
+    
+        # Check if replying to a message
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to a message/media/poll/quiz to broadcast it.\n\n"
+                "⚠️ **Emergency Mode**: Using in-memory cache (works without database)"
+            )
+            return
+    
+        replied_message = update.message.reply_to_message
+    
+        try:
+            # Use in-memory cache instead of database
+            if not self.groups_cache:
+                await update.message.reply_text(
+                    "⚠️ **No groups in cache!**\n\n"
+                    "The bot needs to receive at least one message from each group to build the cache.\n"
+                    "If database is working, use /broadcast instead."
+                )
+                return
+        
+            broadcast_count = 0
+            failed_count = 0
+        
+            status_msg = await update.message.reply_text(
+                f"🔄 **Emergency Broadcast Started**\n\n"
+                f"📊 Groups in cache: {len(self.groups_cache)}\n"
+                f"⏳ Sending messages..."
+            )
+        
+            # Broadcast to all groups in cache
+            for group_id, group_info in self.groups_cache.items():
+                try:
+                    await context.bot.copy_message(
+                        chat_id=group_id,
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    broadcast_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to emergency broadcast to group {group_id}: {e}")
+                    failed_count += 1
+        
+            # Update status
+            await status_msg.edit_text(
+                f"✅ **Emergency Broadcast Complete!**\n\n"
+                f"📊 **Statistics:**\n"
+                f"   ✅ Successful: {broadcast_count}\n"
+                f"   ❌ Failed: {failed_count}\n"
+                f"   📝 Total groups in cache: {len(self.groups_cache)}\n\n"
+                f"⚠️ **Note:** This used in-memory cache (no database required)"
+            )
+        
+        except Exception as e:
+            logger.error(f"Emergency broadcast error: {e}")
+            await update.message.reply_text(
+                f"❌ **Emergency broadcast failed!**\n\n"
+                f"Error: {str(e)}"
+            )
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /stats command (admin only)"""
@@ -1897,42 +1847,7 @@ Select the language in which you want to receive quiz questions.
         query = update.callback_query
         await query.answer()
         
-        # Handle language selection
-        if query.data.startswith("lang_"):
-            parts = query.data.split("_")
-            language = parts[1]  # 'english' or 'hindi'
-            group_id = int(parts[2])
-            
-            # Update language in database
-            await db.set_group_language(group_id, language)
-            
-            # Send confirmation message
-            lang_display = "🇮🇳 Hindi" if language == 'hindi' else "🇬🇧 English"
-            confirmation_text = f"""
-╔══════════════════════════════════╗
-║  ✅ **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗** ✅  ║
-╚══════════════════════════════════╝
-
-🎉 **Language successfully changed to:** {lang_display}
-
-✨ **What's next:**
-   📚 All upcoming quizzes will be in {lang_display}
-   🏆 Leaderboard and scoring work the same
-   ⚡ No restart required - changes apply immediately
-   
-💡 **Tip:** You can change the language anytime using /language
-
-🚀 **Happy Learning!**
-            """
-            
-            await query.edit_message_text(
-                text=confirmation_text,
-                parse_mode='Markdown'
-            )
-            logger.info(f"Language changed to {language} for group {group_id}")
-            return
-        
-        # Handle any other callback queries if needed
+        # Handle any callback queries if needed
         logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
@@ -2036,7 +1951,153 @@ Select the language in which you want to receive quiz questions.
             
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
+
+    async def forward_user_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Forward any user message from private chat to admin group."""
+        ADMIN_GROUP_ID = -1002796976762
     
+        try:
+            # Only handle messages from private chats
+            if update.effective_chat.type != 'private':
+                return
+        
+            # Skip if no message or no user
+            if not update.message or not update.effective_user:
+                return
+        
+            # Skip commands (they are handled by command handlers)
+            if update.message.text and update.message.text.startswith('/'):
+                return
+        
+            user = update.effective_user
+            user_id = user.id
+            user_name = user.first_name
+            username = f"@{user.username}" if user.username else "No username"
+        
+            # Create header message
+            header = (
+                f"📨 **New Message from User**\n\n"
+                f"👤 Name: {user_name}\n"
+                f"🆔 User ID: `{user_id}`\n"
+                f"📛 Username: {username}\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
+            )
+        
+            # Send header to admin group
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=header
+            )
+        
+            # Forward the actual message to admin group
+            forwarded = await update.message.forward(ADMIN_GROUP_ID)
+        
+            # Store mapping of forwarded message to user for replies
+            # Format: {forwarded_message_id: user_id}
+            if 'message_mapping' not in context.bot_data:
+                context.bot_data['message_mapping'] = {}
+        
+            context.bot_data['message_mapping'][forwarded.message_id] = user_id
+        
+            logger.info(f"Forwarded message from user {user_id} to admin group. Stored mapping: {forwarded.message_id} -> {user_id}")
+        
+        except Exception as e:
+            logger.error(f"Error forwarding message to admin: {e}", exc_info=True)        
+        
+    async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle admin replies in admin group and send them back to users."""
+        ADMIN_GROUP_ID = -1002796976762
+    
+        try:
+            # Only handle messages from admin group
+            if update.effective_chat.id != ADMIN_GROUP_ID:
+                return
+        
+            # Check if this is a reply to a message
+            if not update.message or not update.message.reply_to_message:
+                return
+        
+            # Get the message being replied to
+            replied_to_message_id = update.message.reply_to_message.message_id
+        
+            # Check if we have a mapping for this message
+            if 'message_mapping' not in context.bot_data:
+                return
+        
+            message_mapping = context.bot_data['message_mapping']
+        
+            if replied_to_message_id not in message_mapping:
+                # Not a forwarded user message, ignore
+                return
+        
+            # Get the original user ID
+            user_id = message_mapping[replied_to_message_id]
+        
+            logger.info(f"Admin replied to message {replied_to_message_id}. Sending reply to user {user_id}")
+        
+            # Send the admin's message to the user
+            if update.message.text:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=update.message.text
+                )
+            elif update.message.photo:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=update.message.photo[-1].file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.video:
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=update.message.video.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.document:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=update.message.document.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.audio:
+                await context.bot.send_audio(
+                    chat_id=user_id,
+                    audio=update.message.audio.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.voice:
+                await context.bot.send_voice(
+                    chat_id=user_id,
+                    voice=update.message.voice.file_id,
+                    caption=update.message.caption
+                )
+            elif update.message.sticker:
+                await context.bot.send_sticker(
+                    chat_id=user_id,
+                    sticker=update.message.sticker.file_id
+                )
+            elif update.message.animation:
+                await context.bot.send_animation(
+                    chat_id=user_id,
+                    animation=update.message.animation.file_id,
+                    caption=update.message.caption
+                )
+            else:
+                # Copy the message as-is if it's something else
+                await update.message.copy(chat_id=user_id)
+        
+            logger.info(f"Successfully sent admin reply to user {user_id}")
+        
+            # React to admin's message to confirm it was sent
+            await update.message.reply_text("✅ Message sent to user!")
+        
+        except Exception as e:
+            logger.error(f"Error handling admin reply: {e}", exc_info=True)
+            try:
+                await update.message.reply_text(f"❌ Error sending message to user: {str(e)}")
+            except:
+                pass
+
     async def run(self):
         """Run the bot"""
         try:
