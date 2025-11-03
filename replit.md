@@ -4,8 +4,16 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-03: Enhanced group leaderboard with universal ranks
+  - Shows each user's global rank across all groups
+  - Premium decorated design with colorful emojis and clear layout
+  - Performance badges (MASTER, EXPERT, PRO, RISING, BEGINNER)
+  - Accuracy indicators with visual icons
+  - Special borders for top 3 performers
+  - Easy-to-read format with organized stats
+  - Compatible with Neon PostgreSQL database
 - 2025-11-03: Added user-admin messaging system
-  - Users can send messages to bot in private chat, automatically forwarded to admin group
+  - Users can send messages to bot in private chat, automatically forwarded to admin group (-1003049872361)
   - Admins can reply to user messages directly from admin group
   - Supports all message types: text, images, videos, documents, audio, voice, stickers, GIFs, PDFs
   - User details (name, username, ID) shown in admin group

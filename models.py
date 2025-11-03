@@ -500,6 +500,19 @@ class Database:
                 SELECT user_id FROM message_mapping WHERE forwarded_message_id = $1
             """, forwarded_message_id)
             return result
+    
+    async def get_user_universal_rank(self, user_id: int) -> Optional[int]:
+        """Get user's universal rank across all groups"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            # Get rank by counting users with higher total_score
+            rank = await conn.fetchval("""
+                SELECT COUNT(*) + 1 
+                FROM users 
+                WHERE total_score > (SELECT total_score FROM users WHERE id = $1)
+            """, user_id)
+            return rank
 
 # Global database instance
 db = Database()

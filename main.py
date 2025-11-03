@@ -1157,7 +1157,7 @@ Let's connect with Aman Directly, privately and securely!
         )
     
     async def leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /leaderboard command - show current group leaderboard"""
+        """Handle /leaderboard command - show current group leaderboard with universal ranks"""
         chat = update.effective_chat
         
         # Only works in groups
@@ -1176,105 +1176,142 @@ Let's connect with Aman Directly, privately and securely!
             
             if not group_leaderboard:
                 no_data_text = """
-╔══════════════════════════════════╗
-║  🏆 **𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗** 🏆  ║
-╚══════════════════════════════════╝
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   🏆 *𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗* 🏆   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-📊 **Current Status:** No quiz activity yet!
+📊 *Current Status:* No quiz activity yet!
 
-🎯 **How to get on the leaderboard:**
-✅ Answer quiz questions sent by the bot
-✅ Earn points: +4 ✅ correct, -1 ❌ wrong, 0 ⭕ unattempted
-✅ Compete with other group members
+🎯 *How to get on the leaderboard:*
+  ✅ Answer quiz questions sent by the bot
+  ✅ Earn points: +4 ✅ | -1 ❌ | 0 ⭕
+  ✅ Compete with group members
 
-🚀 **Start answering quizzes to see your ranking!**
+🚀 *Start answering quizzes now!*
                 """
                 await update.message.reply_text(no_data_text, parse_mode='Markdown')
                 return
             
-            # Build decorated leaderboard message
+            # Build premium decorated leaderboard
             group_title = chat.title or "This Group"
+            current_time = datetime.now(TIMEZONE).strftime('%d %b %Y • %I:%M %p IST')
+            
             leaderboard_text = f"""
-╔══════════════════════════════════╗
-║  🏆 **𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗** 🏆  ║
-╚══════════════════════════════════╝
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   🏆 *𝗚𝗥𝗢𝗨𝗣 𝗟𝗘𝗔𝗗𝗘𝗥𝗕𝗢𝗔𝗥𝗗* 🏆   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-🏠 **Group:** {group_title}
-📅 **Updated:** {datetime.now(TIMEZONE).strftime('%d %b %Y, %I:%M %p')}
-⚡ **Total Players:** {len(group_leaderboard)}
+🏠 *Group:* {group_title}
+📅 *Updated:* {current_time}
+👥 *Active Players:* {len(group_leaderboard)}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
             
-            # Add top performers with special decorations
+            # Add top performers with enhanced decoration
             for i, user in enumerate(group_leaderboard[:20], 1):  # Show top 20
                 name = user.get('first_name') or user.get('username') or 'Unknown'
+                # Truncate long names
+                if len(name) > 20:
+                    name = name[:17] + "..."
+                    
                 score = user['score']
                 correct = user['correct']
                 wrong = user['wrong'] 
                 unattempted = user['unattempted']
                 total_attempted = correct + wrong + unattempted
+                user_id = user['id']
+                
+                # Get universal rank
+                universal_rank = await db.get_user_universal_rank(user_id)
                 
                 # Rank emojis and decorations
                 if i == 1:
-                    rank_emoji = "🥇"
+                    rank_display = "🥇 *#1*"
                     decoration = "👑"
+                    border = "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+                    border_end = "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
                 elif i == 2:
-                    rank_emoji = "🥈" 
+                    rank_display = "🥈 *#2*"
                     decoration = "⭐"
+                    border = "┌────────────────────────────┐"
+                    border_end = "└────────────────────────────┘"
                 elif i == 3:
-                    rank_emoji = "🥉"
+                    rank_display = "🥉 *#3*"
                     decoration = "✨"
-                elif i <= 10:
-                    rank_emoji = f"🏅 **{i}**"
-                    decoration = "🔥"
+                    border = "┌────────────────────────────┐"
+                    border_end = "└────────────────────────────┘"
                 else:
-                    rank_emoji = f"**{i}**"
-                    decoration = "💪"
+                    rank_display = f"🏅 *#{i}*"
+                    decoration = "💎" if i <= 5 else "🔥" if i <= 10 else "💪"
+                    border = ""
+                    border_end = ""
                 
-                # Performance indicators
+                # Performance badge
                 if score >= 100:
-                    performance = "🚀 Master"
+                    badge = "🚀 *MASTER*"
                 elif score >= 50:
-                    performance = "⚡ Expert"
+                    badge = "⚡ *EXPERT*"
                 elif score >= 20:
-                    performance = "🎯 Pro"
+                    badge = "🎯 *PRO*"
                 elif score >= 10:
-                    performance = "📈 Rising"
+                    badge = "📈 *RISING*"
                 else:
-                    performance = "🌱 Beginner"
+                    badge = "🌱 *BEGINNER*"
                 
                 # Accuracy calculation
                 if total_attempted > 0:
                     accuracy = round((correct / total_attempted) * 100, 1)
-                    if accuracy >= 80:
-                        accuracy_emoji = "🎯"
-                    elif accuracy >= 60:
-                        accuracy_emoji = "📊"
-                    else:
-                        accuracy_emoji = "📉"
                 else:
                     accuracy = 0
-                    accuracy_emoji = "📊"
+                
+                # Accuracy indicator
+                if accuracy >= 90:
+                    acc_icon = "💯"
+                elif accuracy >= 80:
+                    acc_icon = "🎯"
+                elif accuracy >= 60:
+                    acc_icon = "📊"
+                else:
+                    acc_icon = "📉"
+                
+                # Universal rank display
+                if universal_rank == 1:
+                    univ_display = "🌟 *#1 GLOBAL*"
+                elif universal_rank <= 10:
+                    univ_display = f"🌟 *#{universal_rank}*"
+                elif universal_rank <= 50:
+                    univ_display = f"⭐ *#{universal_rank}*"
+                elif universal_rank <= 100:
+                    univ_display = f"✨ *#{universal_rank}*"
+                else:
+                    univ_display = f"💫 *#{universal_rank}*"
+                
+                # Build user entry
+                if border:
+                    leaderboard_text += f"\n{border}\n"
                 
                 leaderboard_text += f"""
-{rank_emoji} [{name}](tg://user?id={user['id']}) {decoration} {performance}
-
-    📊 **Total Score:** {score} points
-    🎯 **Questions:** {total_attempted} attempted
-    ✅ **Correct:** {correct} | ❌ **Wrong:** {wrong} | ⭕ **Skipped:** {unattempted}
-    {accuracy_emoji} **Accuracy:** {accuracy}%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{rank_display} [{name}](tg://user?id={user_id}) {decoration} {badge}
+│ 🌐 *Global:* {univ_display}
+│ 💰 *Score:* `{score}` pts  │  📝 *Attempted:* `{total_attempted}`
+│ ✅ `{correct}`  │  ❌ `{wrong}`  │  ⭕ `{unattempted}`
+│ {acc_icon} *Accuracy:* `{accuracy}%`
 """
+                
+                if border_end:
+                    leaderboard_text += f"{border_end}\n"
+                else:
+                    leaderboard_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             
-            # Add footer with motivational message
+            # Add premium footer
             leaderboard_text += f"""
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🎯 *KEEP PRACTICING TO WIN!* 🎯  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-🎯 **Keep practicing to climb higher!**
-💡 **Tip:** Answer more quizzes to improve your rank
-
-🏆 Use /leaderboard anytime to check your progress!
+💡 *Pro Tip:* Consistency is key to success!
+🏆 Use /leaderboard anytime to check rankings
             """
             
             await update.message.reply_text(leaderboard_text, parse_mode='Markdown')
