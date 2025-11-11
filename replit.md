@@ -4,6 +4,16 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-11: Added Force Join System
+  - New admin commands: /fjoin and /removefjoin
+  - Maximum 5 groups/channels can be required for force join
+  - Users must join all required groups before using bot features
+  - Admins bypass force join requirements completely
+  - Polite message with inline buttons to guide users to join
+  - Applies to all commands and quiz answering (not just /start)
+  - Existing groups can be updated even at 5-group limit
+  - Database-backed force join configuration
+  - No impact on existing features (quiz forwarding, translation, leaderboards)
 - 2025-11-11: Added multilingual quiz support (Hindi/English)
   - New command: /language - Select quiz language preference
   - In groups: Only admins can change language (bot admins or group admins)
@@ -70,6 +80,8 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - ✅ /replyoff - Disable quiz reply messages in a group (bot admin/group admin only)
 - ✅ /replyon - Enable quiz reply messages in a group (bot admin/group admin only)
 - ✅ /language - Set quiz language to Hindi or English (admin-only in groups, everyone in private)
+- ✅ /fjoin - Add groups/channels to force join list (max 5, reply to forwarded message)
+- ✅ /removefjoin - Remove group/channel from force join list (reply to forwarded message)
 
 ### User Commands
 - ✅ /refresh - Reboot/refresh the bot
@@ -87,6 +99,7 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - **custom_replies**: Custom text and media replies
 - **quiz_solutions**: Quiz solutions storage
 - **message_mapping**: User-admin message forwarding mappings
+- **force_join_groups**: Required groups/channels for force join (max 5)
 
 ## Configuration
 - Bot Token: **REQUIRED** - Add your bot token from @BotFather as `BOT_TOKEN` secret
