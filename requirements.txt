@@ -38,3 +38,9 @@ asyncpg
 flask
 python-telegram-bot
 pytz
+APScheduler
+asyncpg
+flask
+python-telegram-bot
+pytz
+schedule
