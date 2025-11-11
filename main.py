@@ -2031,6 +2031,10 @@ Let's connect with Aman Directly, privately and securely!
         try:
             groups = await db.get_all_groups()
             
+            # Precompute universal ranks once for efficiency (avoid N+1 queries)
+            universal_leaderboard = await db.get_universal_leaderboard(1000)  # Get top 1000
+            universal_rank_map = {user['id']: idx + 1 for idx, user in enumerate(universal_leaderboard)}
+            
             for group in groups:
                 if group['id'] == ADMIN_GROUP_ID:
                     continue  # Skip admin group
@@ -2052,10 +2056,19 @@ Let's connect with Aman Directly, privately and securely!
                         wrong = user['wrong']
                         unattempted = user['unattempted']
                         
+                        # Get universal rank from precomputed map
+                        universal_rank = universal_rank_map.get(user['id'], 'N/A')
+                        
                         rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
                         
                         group_text += f"{rank_emoji} [{name}](tg://user?id={user['id']}) - {score} pts\n"
-                        group_text += f"   ✅ {correct} | ❌ {wrong} | ⭕ {unattempted}\n\n"
+                        group_text += f"   ✅ {correct} | ❌ {wrong} | ⭕ {unattempted}\n"
+                        
+                        # Show universal rank with appropriate formatting
+                        if universal_rank != 'N/A':
+                            group_text += f"   🌍 Universal Rank: #{universal_rank}\n\n"
+                        else:
+                            group_text += f"   🌍 Universal Rank: {universal_rank}\n\n"
                     
                     bot = context.bot if context else self.application.bot
                     await bot.send_message(
