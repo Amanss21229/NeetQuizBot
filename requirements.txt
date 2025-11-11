@@ -45,3 +45,6 @@ python-telegram-bot
 pytz
 schedule
 deep-translator
+APScheduler
+deep-translator
+flask

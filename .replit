@@ -5,7 +5,7 @@ integrations = ["python_database:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["cacert", "cargo", "glibcLocales", "libffi", "libiconv", "libxcrypt", "openssl", "pkg-config", "postgresql", "rustc", "gir-rs"]
+packages = ["cacert", "cargo", "gir-rs", "glibcLocales", "libffi", "libiconv", "libxcrypt", "openssl", "pkg-config", "postgresql", "rustc"]
 
 [workflows]
 runButton = "Project"
