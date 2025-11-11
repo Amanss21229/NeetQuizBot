@@ -32,6 +32,7 @@ from models import db
 # Add these imports (put them near the top with other imports)
 from flask import Flask
 import threading
+from deep_translator import GoogleTranslator
 
 
 # Bot configuration
@@ -244,6 +245,7 @@ class NEETQuizBot:
         self.poll_mapping = {}  # Store poll_id -> {quiz_id, group_id, message_id}
         self.quiz_mapping = {}  # {forwarded_message_id: quiz_id}
         self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
+        self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
     
     async def initialize(self):
         """Initialize the bot and database"""
@@ -308,6 +310,7 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("removereply", self.remove_reply_command))
         self.application.add_handler(CommandHandler("replyoff", self.replyoff_command))
         self.application.add_handler(CommandHandler("replyon", self.replyon_command))
+        self.application.add_handler(CommandHandler("language", self.language_command))
         self.application.add_handler(CommandHandler("emergencybroadcast", self.emergency_broadcast_command))
         self.application.add_handler(CommandHandler("ebroadcast", self.emergency_broadcast_command))
         
@@ -611,11 +614,55 @@ Let's ace NEET together! 🚀
             for group in groups:
                 if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
                     try:
+                        # Get language preference for this group
+                        group_language = await db.get_group_language(group['id'])
+                        
+                        # Determine question and options based on language
+                        quiz_question = poll.question
+                        quiz_options = options
+                        
+                        # Translate to Hindi if needed
+                        if group_language == 'hindi':
+                            # Check if translation is cached
+                            cache_key = (quiz_id, 'hindi')
+                            if cache_key in self.translation_cache:
+                                # Use cached translation
+                                quiz_question = self.translation_cache[cache_key]['question']
+                                quiz_options = self.translation_cache[cache_key]['options']
+                                logger.info(f"Using cached Hindi translation for quiz {quiz_id}")
+                            else:
+                                # Translate question and options to Hindi
+                                try:
+                                    translator = GoogleTranslator(source='auto', target='hi')
+                                    
+                                    # Translate question
+                                    quiz_question = translator.translate(poll.question)
+                                    
+                                    # Translate options
+                                    quiz_options = []
+                                    for option in options:
+                                        translated_option = translator.translate(option)
+                                        quiz_options.append(translated_option)
+                                    
+                                    # Cache the translation
+                                    self.translation_cache[cache_key] = {
+                                        'question': quiz_question,
+                                        'options': quiz_options
+                                    }
+                                    logger.info(f"Translated quiz {quiz_id} to Hindi for group {group['id']}")
+                                    
+                                except Exception as translation_error:
+                                    # Fallback to English if translation fails
+                                    logger.error(f"Translation error for quiz {quiz_id}: {translation_error}")
+                                    logger.warning(f"Falling back to English for group {group['id']}")
+                                    quiz_question = poll.question
+                                    quiz_options = options
+                        
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
                             chat_id=group['id'],
-                            question=poll.question,
-                            options=options,
+                            question=quiz_question,
+                            options=quiz_options,
                             type='quiz',  # Always send as quiz for answer tracking
                             correct_option_id=correct_option,
                             is_anonymous=False,  # Critical: allows us to track user answers
@@ -1878,13 +1925,106 @@ Let's connect with Aman Directly, privately and securely!
         )
         logger.info(f"User {user.id} enabled replies in group {chat.id}")
     
+    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /language command - set quiz language preference"""
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # In groups: Check if user is bot admin or group admin
+        if chat.type in ['group', 'supergroup']:
+            # Check if user is bot admin
+            is_bot_admin = await db.is_admin(user.id)
+            
+            # Check if user is group admin
+            try:
+                member = await context.bot.get_chat_member(chat.id, user.id)
+                is_group_admin = member.status in ['creator', 'administrator']
+            except:
+                is_group_admin = False
+            
+            # If neither bot admin nor group admin, deny access
+            if not is_bot_admin and not is_group_admin:
+                await update.message.reply_text(
+                    "🚫 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗗𝗘𝗡𝗜𝗘𝗗**\n\n"
+                    "❌ 𝙏𝙝𝙞𝙨 𝙘𝙤𝙢𝙢𝙖𝙣𝙙 𝙞𝙨 𝙤𝙣𝙡𝙮 𝙛𝙤𝙧 𝙖𝙙𝙢𝙞𝙣𝙨 𝙞𝙣 𝙜𝙧𝙤𝙪𝙥𝙨!\n\n"
+                    "👮‍♂️ Only group admins and bot admins can change language in groups.",
+                    parse_mode='Markdown'
+                )
+                return
+        
+        # Create inline keyboard with language options
+        keyboard = [
+            [
+                InlineKeyboardButton("🇬🇧 English", callback_data=f"lang_english_{chat.id}"),
+                InlineKeyboardButton("🇮🇳 हिंदी", callback_data=f"lang_hindi_{chat.id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Get current language preference
+        current_lang = await db.get_group_language(chat.id) if chat.type in ['group', 'supergroup'] else 'english'
+        lang_display = "English" if current_lang == 'english' else "हिंदी (Hindi)"
+        
+        await update.message.reply_text(
+            f"🌐 **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗦𝗘𝗟𝗘𝗖𝗧𝗜𝗢𝗡**\n\n"
+            f"📌 Current Language: **{lang_display}**\n\n"
+            f"🔤 Choose quiz language:\n"
+            f"• English: Quizzes in English\n"
+            f"• हिंदी: प्रश्न हिंदी में\n\n"
+            f"📊 Note: All users share same leaderboard regardless of language!",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        logger.info(f"User {user.id} opened language selection in chat {chat.id}")
+    
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
         query = update.callback_query
         await query.answer()
         
-        # Handle any callback queries if needed
-        logger.info(f"Callback query: {query.data}")
+        # Handle language selection callbacks
+        if query.data.startswith("lang_"):
+            parts = query.data.split("_")
+            if len(parts) == 3:
+                language = parts[1]  # english or hindi
+                chat_id = int(parts[2])
+                
+                # Verify user has permission (for groups)
+                chat = await context.bot.get_chat(chat_id)
+                if chat.type in ['group', 'supergroup']:
+                    user = query.from_user
+                    is_bot_admin = await db.is_admin(user.id)
+                    
+                    try:
+                        member = await context.bot.get_chat_member(chat_id, user.id)
+                        is_group_admin = member.status in ['creator', 'administrator']
+                    except:
+                        is_group_admin = False
+                    
+                    if not is_bot_admin and not is_group_admin:
+                        await query.answer("❌ Only admins can change language!", show_alert=True)
+                        return
+                
+                # Set language preference
+                await db.set_group_language(chat_id, language)
+                
+                # Update groups cache with language
+                if chat_id in self.groups_cache:
+                    self.groups_cache[chat_id]['language'] = language
+                
+                lang_display = "English 🇬🇧" if language == 'english' else "हिंदी 🇮🇳"
+                
+                await query.edit_message_text(
+                    f"✅ **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗**\n\n"
+                    f"🌐 Quiz Language: **{lang_display}**\n\n"
+                    f"{'📝 Quizzes will now appear in English' if language == 'english' else '📝 अब प्रश्न हिंदी में आएंगे'}\n\n"
+                    f"📊 Leaderboard remains same for all languages!",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Language set to {language} for chat {chat_id}")
+        else:
+            # Handle any other callback queries if needed
+            logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
         """Send daily leaderboards at 10:00 PM IST"""
