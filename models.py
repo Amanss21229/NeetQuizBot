@@ -173,6 +173,20 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            
+            # Force Join Groups table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS force_join_groups (
+                    id SERIAL PRIMARY KEY,
+                    chat_id BIGINT UNIQUE,
+                    chat_username TEXT,
+                    chat_title TEXT,
+                    chat_type TEXT,
+                    invite_link TEXT,
+                    added_by BIGINT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
@@ -547,6 +561,58 @@ class Database:
                 SELECT language_preference FROM groups WHERE id = $1
             """, group_id)
             return result if result is not None else 'english'
+    
+    async def add_force_join_group(self, chat_id: int, chat_username: Optional[str] = None, 
+                                   chat_title: Optional[str] = None, chat_type: Optional[str] = None,
+                                   invite_link: Optional[str] = None, added_by: Optional[int] = None) -> bool:
+        """Add a group/channel to force join list. Returns True if added, False if limit reached for new groups"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            # Check if this chat_id already exists
+            existing = await conn.fetchval("SELECT chat_id FROM force_join_groups WHERE chat_id = $1", chat_id)
+            
+            # If it doesn't exist, check if we've reached the limit
+            if not existing:
+                count = await conn.fetchval("SELECT COUNT(*) FROM force_join_groups")
+                if count >= 5:
+                    return False
+            
+            # Add or update the group
+            await conn.execute("""
+                INSERT INTO force_join_groups (chat_id, chat_username, chat_title, chat_type, invite_link, added_by)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (chat_id) DO UPDATE SET
+                    chat_username = $2,
+                    chat_title = $3,
+                    chat_type = $4,
+                    invite_link = $5
+            """, chat_id, chat_username, chat_title, chat_type, invite_link, added_by)
+            return True
+    
+    async def remove_force_join_group(self, chat_id: int) -> bool:
+        """Remove a group/channel from force join list. Returns True if removed, False if not found"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM force_join_groups WHERE chat_id = $1", chat_id)
+            deleted_count = int(result.split()[-1]) if result else 0
+            return deleted_count > 0
+    
+    async def get_force_join_groups(self) -> List[Dict]:
+        """Get all force join groups/channels"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM force_join_groups ORDER BY created_at")
+            return [dict(row) for row in rows]
+    
+    async def get_force_join_count(self) -> int:
+        """Get count of force join groups"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM force_join_groups")
 
 # Global database instance
 db = Database()

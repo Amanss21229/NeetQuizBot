@@ -247,6 +247,69 @@ class NEETQuizBot:
         self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
     
+    async def check_force_join(self, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, List[Dict]]:
+        """Check if user has joined all force join groups. Returns (is_joined, missing_groups)"""
+        force_join_groups = await db.get_force_join_groups()
+        if not force_join_groups:
+            return True, []
+        
+        missing_groups = []
+        for group in force_join_groups:
+            try:
+                member = await context.bot.get_chat_member(group['chat_id'], user_id)
+                if member.status in ['left', 'kicked']:
+                    missing_groups.append(group)
+            except Exception as e:
+                logger.error(f"Error checking membership for user {user_id} in chat {group['chat_id']}: {e}")
+                missing_groups.append(group)
+        
+        return len(missing_groups) == 0, missing_groups
+    
+    async def send_force_join_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, missing_groups: List[Dict]):
+        """Send polite message with buttons for force join groups"""
+        keyboard = []
+        for group in missing_groups:
+            button_text = group['chat_title'] or group['chat_username'] or f"Join Group {group['chat_id']}"
+            if group['invite_link']:
+                button_url = group['invite_link']
+            elif group['chat_username']:
+                button_url = f"https://t.me/{group['chat_username'].replace('@', '')}"
+            else:
+                continue
+            
+            keyboard.append([InlineKeyboardButton(f"📢 {button_text}", url=button_url)])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message_text = """
+🔐 **Access Required**
+
+Hello! To use this bot, you need to join our official groups/channels first.
+
+✨ **Why join?**
+• Get instant quiz updates
+• Access to exclusive content
+• Connect with NEET aspirants community
+
+👇 **Please join all groups below, then try again:**
+        """
+        
+        # Check if update has message (command/text) or poll_answer
+        if update.message:
+            await update.message.reply_text(
+                message_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            # For poll answers or other updates without message, send directly to user
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+    
     async def initialize(self):
         """Initialize the bot and database"""
         await db.init_pool()
@@ -313,6 +376,8 @@ class NEETQuizBot:
         self.application.add_handler(CommandHandler("language", self.language_command))
         self.application.add_handler(CommandHandler("emergencybroadcast", self.emergency_broadcast_command))
         self.application.add_handler(CommandHandler("ebroadcast", self.emergency_broadcast_command))
+        self.application.add_handler(CommandHandler("fjoin", self.fjoin_command))
+        self.application.add_handler(CommandHandler("removefjoin", self.removefjoin_command))
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
@@ -382,6 +447,13 @@ class NEETQuizBot:
         """Handle /start command"""
         user = update.effective_user
         chat = update.effective_chat
+        
+        # Check force join (only in private chats and groups, not for admins)
+        if chat.type != 'channel' and not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
         
         # Add user to database
         await db.add_user(
@@ -914,6 +986,14 @@ Let's ace NEET together! 🚀
         poll_id = poll_answer.poll_id
         selected_options = poll_answer.option_ids
         
+        # Check force join (not for admins)
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                # User hasn't joined all required groups, don't process answer
+                logger.info(f"User {user.id} attempted to answer quiz without joining force join groups")
+                return
+        
         # Get poll mapping data
         if poll_id not in self.poll_mapping:
             return
@@ -1207,7 +1287,15 @@ Let's connect with Aman Directly, privately and securely!
     
     async def leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /leaderboard command - show current group leaderboard with universal ranks"""
+        user = update.effective_user
         chat = update.effective_chat
+        
+        # Check force join (not for admins)
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
         
         # Only works in groups
         if chat.type == 'private':
@@ -1976,6 +2064,152 @@ Let's connect with Aman Directly, privately and securely!
             parse_mode='Markdown'
         )
         logger.info(f"User {user.id} opened language selection in chat {chat.id}")
+    
+    async def fjoin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /fjoin command to add force join groups (admin only)"""
+        user = update.effective_user
+        
+        # Check if user is admin
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Check if argument is provided
+        if not context.args or len(context.args) == 0:
+            await update.message.reply_text(
+                "📝 **Usage:**\n`/fjoin @username` or `/fjoin group_link`\n\n"
+                "**Examples:**\n"
+                "`/fjoin @neetquizgroup`\n"
+                "`/fjoin https://t.me/neetquizgroup`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        group_identifier = context.args[0]
+        
+        try:
+            # Try to get chat info
+            if group_identifier.startswith('@'):
+                chat = await context.bot.get_chat(group_identifier)
+            elif group_identifier.startswith('https://t.me/'):
+                username = group_identifier.split('/')[-1]
+                chat = await context.bot.get_chat(f'@{username}')
+            elif group_identifier.lstrip('-').isdigit():
+                chat = await context.bot.get_chat(int(group_identifier))
+            else:
+                await update.message.reply_text("❌ Invalid format. Use @username or https://t.me/username")
+                return
+            
+            # Check if limit reached
+            current_count = await db.get_force_join_count()
+            if current_count >= 5:
+                await update.message.reply_text(
+                    "⚠️ **Limit Reached!**\n\n"
+                    "Maximum 5 groups/channels can be added to force join.\n"
+                    "Remove one using `/removefjoin` first.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Get invite link if available
+            invite_link = None
+            try:
+                if chat.username:
+                    invite_link = f"https://t.me/{chat.username}"
+                else:
+                    # Try to get invite link
+                    invite = await context.bot.export_chat_invite_link(chat.id)
+                    invite_link = invite
+            except:
+                pass
+            
+            # Add to force join
+            success = await db.add_force_join_group(
+                chat_id=chat.id,
+                chat_username=chat.username,
+                chat_title=chat.title,
+                chat_type=chat.type,
+                invite_link=invite_link,
+                added_by=user.id
+            )
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **Force Join Added!**\n\n"
+                    f"📢 **Group:** {chat.title or chat.username}\n"
+                    f"🆔 **ID:** `{chat.id}`\n"
+                    f"🔗 **Link:** {invite_link or 'Not available'}\n\n"
+                    f"📊 **Total Force Join Groups:** {current_count + 1}/5",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Admin {user.id} added force join group {chat.id}")
+            else:
+                await update.message.reply_text("❌ Failed to add group to force join list.")
+                
+        except Exception as e:
+            logger.error(f"Error in fjoin command: {e}")
+            await update.message.reply_text(
+                f"❌ Error: {str(e)}\n\n"
+                "Make sure the bot is admin in the group/channel.",
+                parse_mode='Markdown'
+            )
+    
+    async def removefjoin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /removefjoin command to remove force join groups (admin only)"""
+        user = update.effective_user
+        
+        # Check if user is admin
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Check if argument is provided
+        if not context.args or len(context.args) == 0:
+            # Show current force join list
+            force_join_groups = await db.get_force_join_groups()
+            if not force_join_groups:
+                await update.message.reply_text("📭 No force join groups configured.")
+                return
+            
+            message = "📋 **Current Force Join Groups:**\n\n"
+            for idx, group in enumerate(force_join_groups, 1):
+                message += f"{idx}. **{group['chat_title'] or group['chat_username']}**\n"
+                message += f"   🆔 ID: `{group['chat_id']}`\n"
+                message += f"   🔗 {group['invite_link'] or 'No link'}\n\n"
+            
+            message += "\n📝 **Usage:** `/removefjoin chat_id`\n"
+            message += "**Example:** `/removefjoin -1001234567890`"
+            
+            await update.message.reply_text(message, parse_mode='Markdown')
+            return
+        
+        chat_id_str = context.args[0]
+        
+        try:
+            # Convert to integer
+            if chat_id_str.lstrip('-').isdigit():
+                chat_id = int(chat_id_str)
+            else:
+                await update.message.reply_text("❌ Invalid chat ID. Use numeric ID like `-1001234567890`")
+                return
+            
+            # Remove from force join
+            success = await db.remove_force_join_group(chat_id)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **Force Join Removed!**\n\n"
+                    f"🆔 **Chat ID:** `{chat_id}`\n"
+                    f"📊 **Remaining:** {await db.get_force_join_count()}/5",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Admin {user.id} removed force join group {chat_id}")
+            else:
+                await update.message.reply_text("❌ Group not found in force join list.")
+                
+        except Exception as e:
+            logger.error(f"Error in removefjoin command: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode='Markdown')
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline keyboard callbacks"""
