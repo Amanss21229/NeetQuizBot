@@ -1443,10 +1443,12 @@ Let's connect with Aman Directly, privately and securely!
 
 """
             
-            # Add branding
+            # Add branding with founder name
             report += """══════════════════════════════════
 🤖 @DrQuizRobot
 ⚡ Powered By Sansa
+
+👨‍💼 *Founder:* [AMAN](https://t\\.me/Aman\\_PersonalBot)
 ══════════════════════════════════"""
             
             # Create share button
