@@ -61,3 +61,7 @@ deep-translator
 python-telegram-bot
 pytz
 schedule
+asyncpg
+python-telegram-bot
+pytz
+schedule
