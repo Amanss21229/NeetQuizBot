@@ -4,6 +4,19 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-12: Added /Myscore Command - Personal Achievement Report Card
+  - Beautiful decorated achievement report card showing user's complete quiz performance
+  - Clickable user name to view profile
+  - Total universal score and rank across all groups
+  - Performance badges (MASTER, EXPERT, PRO, RISING, BEGINNER) based on accuracy
+  - Detailed quiz statistics (correct, wrong, unattempted)
+  - Group-wise performance breakdown with scores, ranks, and accuracy for each group
+  - Narrow format with emojis, margins, and borders for easy readability
+  - Share button to share achievements on Telegram and other apps
+  - Branding: "@DrQuizRobot Powered By Sansa"
+  - Force join protection (admins bypass)
+  - MarkdownV2 formatting with proper escaping for special characters
+  - Database method to efficiently fetch group-wise scores and ranks
 - 2025-11-12: Enhanced Force Join System - Complete Coverage
   - Force join now enforced on ALL user commands and features: /start, /refresh, /donate, /developer, /sol, /leaderboard, /language (private chats), poll answers, and callback queries
   - Admins completely bypass all force join requirements
