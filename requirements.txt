@@ -48,3 +48,10 @@ deep-translator
 APScheduler
 deep-translator
 flask
+APScheduler
+asyncpg
+deep-translator
+flask
+python-telegram-bot
+pytz
+schedule
