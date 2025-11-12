@@ -1375,6 +1375,10 @@ Let's connect with Aman Directly, privately and securely!
             current_time = datetime.now(TIMEZONE).strftime('%d %b %Y • %I:%M %p IST')
             current_time_escaped = escape_markdown(current_time, version=2)
             
+            # Format and escape accuracy for MarkdownV2
+            accuracy_str = f"{accuracy:.1f}%"
+            accuracy_escaped = escape_markdown(accuracy_str, version=2)
+            
             # Build achievement report card (MarkdownV2 compatible)
             report = f"""
 ╔══════════════════════════════════╗
@@ -1391,7 +1395,7 @@ Let's connect with Aman Directly, privately and securely!
 
 🎯 *Total Score:* `{total_score}` points
 🏆 *Universal Rank:* \\#{universal_rank}
-📈 *Accuracy:* {accuracy:.1f}%
+📈 *Accuracy:* {accuracy_escaped}
 
 📝 *Quiz Statistics:*
   ✅ Correct: {total_correct}
@@ -1424,13 +1428,17 @@ Let's connect with Aman Directly, privately and securely!
                     group_total = group_correct + group_wrong + group_unattempted
                     group_accuracy = (group_correct / group_total * 100) if group_total > 0 else 0
                     
+                    # Format and escape group accuracy for MarkdownV2
+                    group_accuracy_str = f"{group_accuracy:.1f}%"
+                    group_accuracy_escaped = escape_markdown(group_accuracy_str, version=2)
+                    
                     # Add visual divider for each group
                     if i > 1:
                         report += "─────────────────────────────────\n"
                     
                     report += f"""📍 *{group_name}*
    🎯 Score: `{group_score}` pts | Rank: \\#{group_rank}
-   📊 Accuracy: {group_accuracy:.1f}%
+   📊 Accuracy: {group_accuracy_escaped}
    ✅ {group_correct} | ❌ {group_wrong} | ⭕ {group_unattempted}
 
 """
