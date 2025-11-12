@@ -204,6 +204,20 @@ class Database:
                     updated_at = NOW()
             """, user_id, username, first_name, last_name)
     
+    async def get_user(self, user_id: int) -> Optional[Dict]:
+        """Get user data by user ID"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, username, first_name, last_name, 
+                       total_score, correct_answers, wrong_answers, unattempted,
+                       created_at, updated_at
+                FROM users
+                WHERE id = $1
+            """, user_id)
+            return dict(row) if row else None
+    
     async def add_group(self, group_id: int, title: str, group_type: str):
         """Add or update group in database"""
         if not self.pool:
