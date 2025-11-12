@@ -1117,6 +1117,13 @@ Let's ace NEET together! 🚀
     # ✅ User solution dekh sakta hai
     async def get_solution(self, update, context):
         message = update.message
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
         
         # If not replying to any message, show usage instructions
         if not message.reply_to_message:
@@ -1188,11 +1195,25 @@ Let's ace NEET together! 🚀
     
     async def refresh_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /refresh command"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
+        
         await update.message.reply_text("🔄 Bot refreshed successfully! All systems operational. 🚀")
     
     async def donate_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /donate command"""
         user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
         
         # Create donation button
         keyboard = [
@@ -1246,6 +1267,12 @@ Let's ace NEET together! 🚀
     async def developer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /developer command"""
         user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
         
         keyboard = [
             [InlineKeyboardButton("💬 Meet With Aman", url="https://t.me/Aman_PersonalBot")],
@@ -2018,6 +2045,13 @@ Let's connect with Aman Directly, privately and securely!
         user = update.effective_user
         chat = update.effective_chat
         
+        # Check force join for private chats (not for admins)
+        if chat.type == 'private' and not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
+        
         # In groups: Check if user is bot admin or group admin
         if chat.type in ['group', 'supergroup']:
             # Check if user is bot admin
@@ -2215,6 +2249,17 @@ Let's connect with Aman Directly, privately and securely!
         """Handle inline keyboard callbacks"""
         query = update.callback_query
         await query.answer()
+        
+        user = query.from_user
+        
+        # Check force join ONLY for private chat callbacks (not for groups, not for admins)
+        if query.message and query.message.chat.type == 'private':
+            if not await db.is_admin(user.id):
+                is_joined, missing_groups = await self.check_force_join(user.id, context)
+                if not is_joined:
+                    await query.answer("❌ Please join all required groups first!", show_alert=True)
+                    await self.send_force_join_message(update, context, user.id, missing_groups)
+                    return
         
         # Handle language selection callbacks
         if query.data.startswith("lang_"):
