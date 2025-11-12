@@ -990,14 +990,6 @@ Let's ace NEET together! 🚀
         poll_id = poll_answer.poll_id
         selected_options = poll_answer.option_ids
         
-        # Check force join (not for admins)
-        if not await db.is_admin(user.id):
-            is_joined, missing_groups = await self.check_force_join(user.id, context)
-            if not is_joined:
-                # User hasn't joined all required groups, don't process answer
-                logger.info(f"User {user.id} attempted to answer quiz without joining force join groups")
-                return
-        
         # Get poll mapping data
         if poll_id not in self.poll_mapping:
             return
