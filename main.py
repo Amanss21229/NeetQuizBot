@@ -17,6 +17,7 @@ from telegram import (
     ChatMember,
     Message
 )
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -33,6 +34,7 @@ from models import db
 from flask import Flask
 import threading
 from deep_translator import GoogleTranslator
+from urllib.parse import quote
 
 
 # Bot configuration
@@ -356,6 +358,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("refresh", self.refresh_command))
         self.application.add_handler(CommandHandler("donate", self.donate_command))
         self.application.add_handler(CommandHandler("developer", self.developer_command))
+        self.application.add_handler(CommandHandler("myscore", self.myscore_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         self.application.add_handler(CommandHandler("sol", self.get_solution))
       
@@ -423,6 +426,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("refresh", "Refresh the bot"),
             BotCommand("donate", "Support the bot"),
             BotCommand("developer", "Meet the developer"),
+            BotCommand("myscore", "View your achievement report"),
             BotCommand("leaderboard", "Show group leaderboard"),
             BotCommand("sol", "Show Detail Solution"),
         ]
@@ -1311,6 +1315,173 @@ Let's connect with Aman Directly, privately and securely!
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+    
+    async def myscore_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /Myscore command - show user's achievement report card"""
+        user = update.effective_user
+        
+        # Check force join (not for admins)
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
+        
+        try:
+            # Get user data
+            user_data = await db.get_user(user.id)
+            if not user_data:
+                await update.message.reply_text(
+                    "❌ No quiz activity found\\!\n\n"
+                    "🎯 Start answering quizzes to see your achievement report\\!",
+                    parse_mode='MarkdownV2'
+                )
+                return
+            
+            # Get user's universal rank
+            universal_rank = await db.get_user_universal_rank(user.id)
+            
+            # Get user's group-wise scores
+            group_scores = await db.get_user_group_scores(user.id)
+            
+            # Build user profile link - escape markdown characters for MarkdownV2
+            user_name = user.first_name
+            user_name_escaped = escape_markdown(user_name, version=2)
+            user_link = f"[{user_name_escaped}](tg://user?id={user.id})"
+            
+            # Total score and stats
+            total_score = user_data.get('total_score', 0)
+            total_correct = user_data.get('correct_answers', 0)
+            total_wrong = user_data.get('wrong_answers', 0)
+            total_unattempted = user_data.get('unattempted', 0)
+            total_quizzes = total_correct + total_wrong + total_unattempted
+            
+            # Calculate accuracy
+            accuracy = (total_correct / total_quizzes * 100) if total_quizzes > 0 else 0
+            
+            # Get performance badge
+            if accuracy >= 90:
+                badge = "🏆 MASTER"
+            elif accuracy >= 75:
+                badge = "💎 EXPERT"
+            elif accuracy >= 60:
+                badge = "⭐ PRO"
+            elif accuracy >= 40:
+                badge = "🌟 RISING"
+            else:
+                badge = "🔰 BEGINNER"
+            
+            # Current time
+            current_time = datetime.now(TIMEZONE).strftime('%d %b %Y • %I:%M %p IST')
+            
+            # Build achievement report card (MarkdownV2 compatible)
+            report = f"""
+╔══════════════════════════════════╗
+║ 🎓 *𝗔𝗖𝗛𝗜𝗘𝗩𝗘𝗠𝗘𝗡𝗧 𝗥𝗘𝗣𝗢𝗥𝗧* 🎓  ║
+╚══════════════════════════════════╝
+
+👤 *Student:* {user_link}
+📅 *Generated:* {current_time}
+🏅 *Status:* {badge}
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  📊 *𝗨𝗡𝗜𝗩𝗘𝗥𝗦𝗔𝗟 𝗣𝗘𝗥𝗙𝗢𝗥𝗠𝗔𝗡𝗖𝗘*  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+🎯 *Total Score:* `{total_score}` points
+🏆 *Universal Rank:* \\#{universal_rank}
+📈 *Accuracy:* {accuracy:.1f}%
+
+📝 *Quiz Statistics:*
+  ✅ Correct: {total_correct}
+  ❌ Wrong: {total_wrong}
+  ⭕ Unattempted: {total_unattempted}
+  📚 Total Quizzes: {total_quizzes}
+
+"""
+            
+            # Add group-wise performance
+            if group_scores:
+                report += """┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🏠 *𝗚𝗥𝗢𝗨𝗣 𝗣𝗘𝗥𝗙𝗢𝗥𝗠𝗔𝗡𝗖𝗘*  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+"""
+                for i, group in enumerate(group_scores, 1):
+                    group_name = group['group_name']
+                    # Truncate long group names
+                    if len(group_name) > 25:
+                        group_name = group_name[:22] + "..."
+                    # Escape markdown characters in group name for MarkdownV2
+                    group_name = escape_markdown(group_name, version=2)
+                    
+                    group_score = group['score']
+                    group_rank = group['rank']
+                    group_correct = group['correct']
+                    group_wrong = group['wrong']
+                    group_unattempted = group['unattempted']
+                    group_total = group_correct + group_wrong + group_unattempted
+                    group_accuracy = (group_correct / group_total * 100) if group_total > 0 else 0
+                    
+                    # Add visual divider for each group
+                    if i > 1:
+                        report += "─────────────────────────────────\n"
+                    
+                    report += f"""📍 *{group_name}*
+   🎯 Score: `{group_score}` pts | Rank: \\#{group_rank}
+   📊 Accuracy: {group_accuracy:.1f}%
+   ✅ {group_correct} | ❌ {group_wrong} | ⭕ {group_unattempted}
+
+"""
+            else:
+                report += """┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🏠 *𝗚𝗥𝗢𝗨𝗣 𝗣𝗘𝗥𝗙𝗢𝗥𝗠𝗔𝗡𝗖𝗘*  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+📭 No group activity yet\\!
+🎯 Join groups and start answering quizzes\\!
+
+"""
+            
+            # Add branding
+            report += """══════════════════════════════════
+🤖 @DrQuizRobot
+⚡ Powered By Sansa
+══════════════════════════════════"""
+            
+            # Create share button
+            # The share button will allow users to forward this message
+            # Don't escape for share text as it's URL-encoded, not Markdown
+            share_text = f"""🎓 Achievement Report 🎓
+
+👤 {user_name}
+🎯 Score: {total_score} pts
+🏆 Rank: #{universal_rank}
+📈 Accuracy: {accuracy:.1f}%
+
+🤖 @DrQuizRobot
+⚡ Powered By Sansa"""
+            
+            keyboard = [
+                [InlineKeyboardButton("📤 Share Your Achievement", 
+                                     url=f"https://t.me/share/url?url={quote(share_text)}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Send the achievement report
+            await update.message.reply_text(
+                report,
+                reply_markup=reply_markup,
+                parse_mode='MarkdownV2'
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in myscore command: {e}")
+            await update.message.reply_text(
+                "❌ Error generating your achievement report\\!\n"
+                "Please try again later\\.",
+                parse_mode='MarkdownV2'
+            )
     
     async def leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /leaderboard command - show current group leaderboard with universal ranks"""
