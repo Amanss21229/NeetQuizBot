@@ -1371,8 +1371,9 @@ Let's connect with Aman Directly, privately and securely!
             else:
                 badge = "🔰 BEGINNER"
             
-            # Current time
+            # Current time - escape for MarkdownV2
             current_time = datetime.now(TIMEZONE).strftime('%d %b %Y • %I:%M %p IST')
+            current_time_escaped = escape_markdown(current_time, version=2)
             
             # Build achievement report card (MarkdownV2 compatible)
             report = f"""
@@ -1381,7 +1382,7 @@ Let's connect with Aman Directly, privately and securely!
 ╚══════════════════════════════════╝
 
 👤 *Student:* {user_link}
-📅 *Generated:* {current_time}
+📅 *Generated:* {current_time_escaped}
 🏅 *Status:* {badge}
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
