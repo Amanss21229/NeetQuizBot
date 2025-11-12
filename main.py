@@ -1437,9 +1437,9 @@ Let's connect with Aman Directly, privately and securely!
                         report += "─────────────────────────────────\n"
                     
                     report += f"""📍 *{group_name}*
-   🎯 Score: `{group_score}` pts | Rank: \\#{group_rank}
+   🎯 Score: `{group_score}` pts \\| Rank: \\#{group_rank}
    📊 Accuracy: {group_accuracy_escaped}
-   ✅ {group_correct} | ❌ {group_wrong} | ⭕ {group_unattempted}
+   ✅ {group_correct} \\| ❌ {group_wrong} \\| ⭕ {group_unattempted}
 
 """
             else:
