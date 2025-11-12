@@ -542,6 +542,48 @@ class Database:
             """, user_id)
             return rank
     
+    async def get_user_group_scores(self, user_id: int) -> List[Dict]:
+        """Get user's scores and ranks for all groups they participated in"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            # Get user's group-wise scores
+            rows = await conn.fetch("""
+                WITH user_group_scores AS (
+                    SELECT 
+                        g.id as group_id,
+                        g.title as group_name,
+                        COALESCE(SUM(uqs.points), 0) as score,
+                        COUNT(CASE WHEN uqs.points = 4 THEN 1 END) as correct,
+                        COUNT(CASE WHEN uqs.points = -1 THEN 1 END) as wrong,
+                        COUNT(CASE WHEN uqs.points = 0 THEN 1 END) as unattempted
+                    FROM groups g
+                    JOIN user_quiz_scores uqs ON g.id = uqs.group_id
+                    WHERE uqs.user_id = $1
+                    GROUP BY g.id, g.title
+                ),
+                group_ranks AS (
+                    SELECT 
+                        uqs.group_id,
+                        uqs.user_id,
+                        RANK() OVER (PARTITION BY uqs.group_id ORDER BY SUM(uqs.points) DESC) as rank
+                    FROM user_quiz_scores uqs
+                    GROUP BY uqs.group_id, uqs.user_id
+                )
+                SELECT 
+                    ugs.group_id,
+                    ugs.group_name,
+                    ugs.score,
+                    ugs.correct,
+                    ugs.wrong,
+                    ugs.unattempted,
+                    COALESCE(gr.rank, 0) as rank
+                FROM user_group_scores ugs
+                LEFT JOIN group_ranks gr ON ugs.group_id = gr.group_id AND gr.user_id = $1
+                ORDER BY ugs.score DESC
+            """, user_id)
+            return [dict(row) for row in rows]
+    
     async def set_group_language(self, group_id: int, language: str):
         """Set language preference for a group"""
         if not self.pool:
