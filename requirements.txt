@@ -55,3 +55,9 @@ flask
 python-telegram-bot
 pytz
 schedule
+APScheduler
+asyncpg
+deep-translator
+python-telegram-bot
+pytz
+schedule
