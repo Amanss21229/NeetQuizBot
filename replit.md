@@ -4,16 +4,19 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-12: Enhanced Force Join System - Complete Coverage
+  - Force join now enforced on ALL user commands and features: /start, /refresh, /donate, /developer, /sol, /leaderboard, /language (private chats), poll answers, and callback queries
+  - Admins completely bypass all force join requirements
+  - Group admins can manage group settings (like language) without force join
+  - Proper force join message with inline buttons shown for all blocked actions
+  - Private chat callbacks protected while group functionality remains unaffected
+  - No way for users to bypass force join - complete enforcement
 - 2025-11-11: Added Force Join System
   - New admin commands: /fjoin and /removefjoin
   - Maximum 5 groups/channels can be required for force join
   - Users must join all required groups before using bot features
-  - Admins bypass force join requirements completely
   - Polite message with inline buttons to guide users to join
-  - Applies to all commands and quiz answering (not just /start)
-  - Existing groups can be updated even at 5-group limit
   - Database-backed force join configuration
-  - No impact on existing features (quiz forwarding, translation, leaderboards)
 - 2025-11-11: Added multilingual quiz support (Hindi/English)
   - New command: /language - Select quiz language preference
   - In groups: Only admins can change language (bot admins or group admins)
