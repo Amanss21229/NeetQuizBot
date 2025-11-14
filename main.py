@@ -1696,7 +1696,8 @@ Let's connect with Aman Directly, privately and securely!
                     await context.bot.copy_message(
                         chat_id=group['id'],
                         from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
+                        message_id=replied_message.message_id,
+                        reply_markup=replied_message.reply_markup
                     )
                     group_count += 1
                 except Exception as e:
@@ -1708,7 +1709,8 @@ Let's connect with Aman Directly, privately and securely!
                     await context.bot.copy_message(
                         chat_id=user_data['id'],
                         from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
+                        message_id=replied_message.message_id,
+                        reply_markup=replied_message.reply_markup
                     )
                     user_count += 1
                 except Exception as e:
@@ -1771,7 +1773,8 @@ Let's connect with Aman Directly, privately and securely!
                     await context.bot.copy_message(
                         chat_id=user_data['id'],
                         from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
+                        message_id=replied_message.message_id,
+                        reply_markup=replied_message.reply_markup
                     )
                     user_count += 1
                 except Exception as e:
