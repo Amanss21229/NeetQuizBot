@@ -1680,7 +1680,13 @@ Let's connect with Aman Directly, privately and securely!
         try:
             # Get all groups and users
             groups = await db.get_all_groups()
-            broadcast_count = 0
+            users = await db.get_all_users()
+            
+            group_count = 0
+            user_count = 0
+            
+            # Send initial status message
+            status_msg = await update.message.reply_text("📡 Broadcasting message...")
             
             # Broadcast to all groups
             for group in groups:
@@ -1690,12 +1696,29 @@ Let's connect with Aman Directly, privately and securely!
                         from_chat_id=replied_message.chat_id,
                         message_id=replied_message.message_id
                     )
-                    broadcast_count += 1
+                    group_count += 1
                 except Exception as e:
                     logger.error(f"Failed to broadcast to group {group['id']}: {e}")
             
-            await update.message.reply_text(
-                f"✅ Message broadcast to {broadcast_count} groups successfully!"
+            # Broadcast to all users (private chats)
+            for user_data in users:
+                try:
+                    await context.bot.copy_message(
+                        chat_id=user_data['id'],
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    user_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to broadcast to user {user_data['id']}: {e}")
+            
+            # Update status message with results
+            await status_msg.edit_text(
+                f"✅ Broadcast Complete!\n\n"
+                f"📊 Statistics:\n"
+                f"👥 Users: {user_count}/{len(users)}\n"
+                f"🏠 Groups: {group_count}/{len(groups)}\n"
+                f"📈 Total: {user_count + group_count}"
             )
             
         except Exception as e:
@@ -2480,14 +2503,16 @@ Let's connect with Aman Directly, privately and securely!
             logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
-        """Send daily leaderboards at 10:00 PM IST"""
+        """Send daily leaderboards at 10:00 PM IST to groups and users' private chats"""
         try:
             groups = await db.get_all_groups()
+            all_users = await db.get_all_users()
             
             # Precompute universal ranks once for efficiency (avoid N+1 queries)
             universal_leaderboard = await db.get_universal_leaderboard(1000)  # Get top 1000
             universal_rank_map = {user['id']: idx + 1 for idx, user in enumerate(universal_leaderboard)}
             
+            # Send group-specific leaderboards to groups
             for group in groups:
                 if group['id'] == ADMIN_GROUP_ID:
                     continue  # Skip admin group
@@ -2554,7 +2579,44 @@ Let's connect with Aman Directly, privately and securely!
                 except Exception as e:
                     logger.error(f"Error sending leaderboard to group {group['id']}: {e}")
             
-            logger.info("Daily leaderboards sent successfully")
+            # Send universal leaderboard to all users' private chats
+            universal_leaderboard_top50 = await db.get_universal_leaderboard(50)
+            
+            if universal_leaderboard_top50:
+                bot = context.bot if context else self.application.bot
+                
+                # Build universal leaderboard message for users
+                user_universal_text = "🌍 **UNIVERSAL LEADERBOARD (Top 50)**\n"
+                user_universal_text += f"📅 Date: {datetime.now(TIMEZONE).strftime('%Y-%m-%d')}\n"
+                user_universal_text += f"🕙 Daily Update - 10:00 PM IST\n\n"
+                
+                for i, user in enumerate(universal_leaderboard_top50, 1):
+                    name = user['first_name'] or 'Unknown'
+                    score = user['score']
+                    
+                    rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                    
+                    user_universal_text += f"{rank_emoji} {name} - {score} pts\n"
+                
+                user_universal_text += "\n🎯 Keep practicing to improve your rank!\n"
+                user_universal_text += "🤖 @DrQuizRobot"
+                
+                # Send to all users
+                user_count = 0
+                for user_data in all_users:
+                    try:
+                        await bot.send_message(
+                            chat_id=user_data['id'],
+                            text=user_universal_text,
+                            parse_mode='Markdown'
+                        )
+                        user_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to send daily leaderboard to user {user_data['id']}: {e}")
+                
+                logger.info(f"Daily leaderboards sent successfully - Groups: {len(groups)}, Users: {user_count}/{len(all_users)}")
+            else:
+                logger.info("Daily leaderboards sent successfully to groups")
             
         except Exception as e:
             logger.error(f"Error in daily leaderboard task: {e}")

@@ -367,6 +367,14 @@ class Database:
             rows = await conn.fetch("SELECT * FROM groups WHERE is_active = TRUE")
             return [dict(row) for row in rows]
     
+    async def get_all_users(self) -> List[Dict]:
+        """Get all users who have interacted with the bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id, username, first_name, last_name FROM users")
+            return [dict(row) for row in rows]
+    
     async def get_bot_stats(self) -> Dict:
         """Get bot statistics"""
         if not self.pool:
