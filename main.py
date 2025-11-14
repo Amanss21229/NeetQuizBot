@@ -364,6 +364,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
       
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
+        self.application.add_handler(CommandHandler("pbroadcast", self.pbroadcast_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("promote", self.promote_command))
         self.application.add_handler(CommandHandler("remove", self.remove_command))
@@ -433,6 +434,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         
         admin_commands = [
             BotCommand("broadcast", "Broadcast message"),
+            BotCommand("pbroadcast", "Private broadcast (users only)"),
             BotCommand("stats", "Show bot statistics"),
             BotCommand("promote", "Promote user as admin"),
             BotCommand("remove", "Remove admin"),
@@ -1724,6 +1726,71 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Broadcast error: {e}")
             await update.message.reply_text("❌ Error occurred during broadcast.")
+
+    async def pbroadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /pbroadcast command - Broadcast ONLY to users' private chats (admin only)"""
+        user = update.effective_user
+        
+        # Check if user is admin
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        # Check if replying to a message
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to a message to broadcast it.\n\n"
+                "📱 This will send the message ONLY to users' private chats (not groups).\n"
+                "Supports: Text, Images, Videos, PDFs, Links, Buttons, Emojis, Stickers, GIFs, and all media types."
+            )
+            return
+        
+        replied_message = update.message.reply_to_message
+        
+        try:
+            # Get all users (NOT groups)
+            users = await db.get_all_users()
+            
+            if not users:
+                await update.message.reply_text("❌ No users found in database.")
+                return
+            
+            user_count = 0
+            failed_count = 0
+            
+            # Send initial status message
+            status_msg = await update.message.reply_text(
+                f"📱 Private Broadcasting...\n\n"
+                f"👥 Total users: {len(users)}\n"
+                f"⏳ Sending to private chats only..."
+            )
+            
+            # Broadcast to all users' private chats ONLY
+            for user_data in users:
+                try:
+                    await context.bot.copy_message(
+                        chat_id=user_data['id'],
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    user_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Failed to private broadcast to user {user_data['id']}: {e}")
+            
+            # Update status message with results
+            await status_msg.edit_text(
+                f"✅ Private Broadcast Complete!\n\n"
+                f"📊 Statistics:\n"
+                f"✓ Successful: {user_count}/{len(users)}\n"
+                f"✗ Failed: {failed_count}\n"
+                f"📱 Sent to: Users' Private Chats Only\n"
+                f"🏠 Groups: Not sent (private broadcast)"
+            )
+            
+        except Exception as e:
+            logger.error(f"Private broadcast error: {e}")
+            await update.message.reply_text("❌ Error occurred during private broadcast.")
 
     async def emergency_broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database"""
