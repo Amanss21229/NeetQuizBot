@@ -4,6 +4,13 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-16: Database Optimizations to Reduce Neon DB Compute Hours
+  - Optimized connection pool: min_size=0 (no idle connections), max_size=3 (reduced from 10)
+  - Added aggressive connection lifecycle management: 60-second idle timeout, 10-second query timeout
+  - Implemented in-memory caching for frequently accessed data (force join groups, language preferences)
+  - Cache TTL: 5 minutes for force join groups, 1 minute for language preferences
+  - Automatic cache invalidation on data updates
+  - Expected reduction: 50-70% decrease in daily compute hours
 - 2025-11-16: Added New Broadcasting and Promotion Commands
   - New admin command: /gbroadcast - Broadcast messages to all groups and channels only (not private chats)
   - Supports all message types: text, images, videos, PDFs, polls, buttons, emojis, stickers, GIFs
