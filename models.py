@@ -14,12 +14,15 @@ class Database:
         self.pool: Optional[asyncpg.Pool] = None
     
     async def init_pool(self):
-        """Initialize database connection pool"""
+        """Initialize database connection pool with aggressive timeouts to reduce Neon DB compute hours"""
         self.pool = await asyncpg.create_pool(
             os.environ.get("DATABASE_URL"),
-            min_size=1,
-            max_size=10,
-            statement_cache_size=0
+            min_size=0,  # No minimum connections = no idle connections eating compute hours
+            max_size=3,  # Reduced from 10 to 3 for lower resource usage
+            max_queries=5000,  # Recycle connections after 5000 queries
+            max_inactive_connection_lifetime=60.0,  # Close connections idle for 60 seconds
+            command_timeout=10.0,  # 10 second timeout for queries
+            statement_cache_size=0  # Disable statement cache to reduce memory
         )
         await self.create_tables()
     
