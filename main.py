@@ -361,10 +361,12 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("myscore", self.myscore_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         self.application.add_handler(CommandHandler("sol", self.get_solution))
+        self.application.add_handler(CommandHandler("promotion", self.promotion_command))
       
         # Admin commands
         self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
         self.application.add_handler(CommandHandler("pbroadcast", self.pbroadcast_command))
+        self.application.add_handler(CommandHandler("gbroadcast", self.gbroadcast_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("promote", self.promote_command))
         self.application.add_handler(CommandHandler("remove", self.remove_command))
@@ -1863,6 +1865,110 @@ Let's connect with Aman Directly, privately and securely!
                 f"❌ **Emergency broadcast failed!**\n\n"
                 f"Error: {str(e)}"
             )
+    
+    async def gbroadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /gbroadcast command - Broadcast ONLY to groups and channels (admin only)"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to a message to broadcast it.\n\n"
+                "🏢 This will send the message ONLY to groups and channels (not private chats).\n"
+                "Supports: Text, Images, Videos, PDFs, Polls, Buttons, Emojis, Stickers, GIFs, and all media types."
+            )
+            return
+        
+        replied_message = update.message.reply_to_message
+        
+        try:
+            groups = await db.get_all_groups()
+            
+            if not groups:
+                await update.message.reply_text("❌ No groups found in database.")
+                return
+            
+            group_count = 0
+            failed_count = 0
+            
+            status_msg = await update.message.reply_text(
+                f"🏢 Group Broadcasting...\n\n"
+                f"📊 Total groups: {len(groups)}\n"
+                f"⏳ Sending to groups and channels only..."
+            )
+            
+            for group in groups:
+                try:
+                    await context.bot.copy_message(
+                        chat_id=group['id'],
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id,
+                        reply_markup=replied_message.reply_markup
+                    )
+                    group_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Failed to group broadcast to {group['id']}: {e}")
+            
+            await status_msg.edit_text(
+                f"✅ Group Broadcast Complete!\n\n"
+                f"📊 Statistics:\n"
+                f"✓ Successful: {group_count}/{len(groups)}\n"
+                f"✗ Failed: {failed_count}\n"
+                f"🏢 Sent to: Groups & Channels Only\n"
+                f"👤 Private Chats: Not sent (group broadcast)"
+            )
+            
+        except Exception as e:
+            logger.error(f"Group broadcast error: {e}")
+            await update.message.reply_text("❌ Error occurred during group broadcast.")
+    
+    async def promotion_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /promotion command - Show promotional message (available to all users)"""
+        
+        keyboard = [[InlineKeyboardButton("📢 Contact for Promotion", url="https://t.me/sansaadsbot")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        promotion_text = """
+╔═══════════════════════════════════╗
+║   🚀 **PROMOTE YOUR BUSINESS!** 🚀   ║
+╚═══════════════════════════════════╝
+
+📣 **Get Maximum Reach & Visibility!**
+
+✨ **We Promote:**
+   • 📱 Telegram Groups & Channels
+   • 🤖 Bots & Applications
+   • 🏢 Brands & Startups
+   • 📦 Products & Services
+   • 💼 Business Ventures
+
+💎 **Why Choose Us?**
+   ✓ Best Market Prices
+   ✓ Targeted Audience Reach
+   ✓ Professional Service
+   ✓ Quick Delivery
+   ✓ Proven Results
+
+💰 **Affordable Packages Available!**
+
+┌─────────────────────────────────┐
+│  📞 **CONTACT US NOW:**           │
+│  Click the button below! ↓        │
+└─────────────────────────────────┘
+
+⚡ *Limited Time Offers!*
+🎯 *Grow Your Presence Today!*
+        """
+        
+        await update.message.reply_text(
+            promotion_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /stats command (admin only)"""
