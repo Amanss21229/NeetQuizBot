@@ -4,6 +4,12 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-11-16: Added New Broadcasting and Promotion Commands
+  - New admin command: /gbroadcast - Broadcast messages to all groups and channels only (not private chats)
+  - Supports all message types: text, images, videos, PDFs, polls, buttons, emojis, stickers, GIFs
+  - New user command: /promotion - Show promotional message for advertising services
+  - Promotional message includes inline button linking to @sansaadsbot
+  - Well-formatted promotional text with emojis, borders, and professional design
 - 2025-11-12: Added /Myscore Command - Personal Achievement Report Card
   - Beautiful decorated achievement report card showing user's complete quiz performance
   - Clickable user name to view profile
@@ -89,6 +95,8 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 
 ### Admin Commands
 - ✅ /broadcast - Forward replied message to all groups and users
+- ✅ /pbroadcast - Broadcast message to all private chats only (not groups)
+- ✅ /gbroadcast - Broadcast message to all groups and channels only (not private chats)
 - ✅ /stats - Show bot statistics (users, groups, quizzes, answers)
 - ✅ /promote - Promote user as bot admin
 - ✅ /remove - Remove user from bot admin list
@@ -103,6 +111,7 @@ A comprehensive Telegram bot for NEET students featuring automatic quiz forwardi
 - ✅ /refresh - Reboot/refresh the bot
 - ✅ /donate - Donate via Telegram Stars
 - ✅ /developer - Meet the developer with inline button
+- ✅ /promotion - Get promotional advertising services information
 - ✅ /language - Select preferred quiz language (available in private chats)
 
 ### Database Schema
