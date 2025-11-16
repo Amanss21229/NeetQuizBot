@@ -3,6 +3,7 @@ import asyncpg
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Union
 
@@ -12,6 +13,32 @@ logger = logging.getLogger(__name__)
 class Database:
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
+        # Cache to reduce database queries and compute hours
+        self._cache = {}
+        self._cache_ttl = {
+            'force_join_groups': 300,  # 5 minutes
+            'group_language': 60,  # 1 minute per group
+            'admin_list': 300,  # 5 minutes
+        }
+    
+    def _get_cache(self, key: str) -> Optional[any]:
+        """Get value from cache if not expired"""
+        if key in self._cache:
+            data, timestamp, ttl = self._cache[key]
+            if time.time() - timestamp < ttl:
+                return data
+            else:
+                del self._cache[key]
+        return None
+    
+    def _set_cache(self, key: str, value: any, ttl: int):
+        """Set value in cache with TTL"""
+        self._cache[key] = (value, time.time(), ttl)
+    
+    def _invalidate_cache(self, key: str):
+        """Invalidate specific cache key"""
+        if key in self._cache:
+            del self._cache[key]
     
     async def init_pool(self):
         """Initialize database connection pool with aggressive timeouts to reduce Neon DB compute hours"""
@@ -618,16 +645,25 @@ class Database:
                 UPDATE groups SET language_preference = $2, updated_at = NOW()
                 WHERE id = $1
             """, group_id, language.lower())
+        # Invalidate cache
+        self._invalidate_cache(f'group_language_{group_id}')
     
     async def get_group_language(self, group_id: int) -> str:
-        """Get language preference for a group"""
+        """Get language preference for a group (cached to reduce DB queries)"""
+        cache_key = f'group_language_{group_id}'
+        cached = self._get_cache(cache_key)
+        if cached is not None:
+            return cached
+        
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             result = await conn.fetchval("""
                 SELECT language_preference FROM groups WHERE id = $1
             """, group_id)
-            return result if result is not None else 'english'
+            language = result if result is not None else 'english'
+            self._set_cache(cache_key, language, self._cache_ttl['group_language'])
+            return language
     
     async def add_force_join_group(self, chat_id: int, chat_username: Optional[str] = None, 
                                    chat_title: Optional[str] = None, chat_type: Optional[str] = None,
@@ -655,6 +691,7 @@ class Database:
                     chat_type = $4,
                     invite_link = $5
             """, chat_id, chat_username, chat_title, chat_type, invite_link, added_by)
+            self._invalidate_cache('force_join_groups')  # Invalidate cache
             return True
     
     async def remove_force_join_group(self, chat_id: int) -> bool:
@@ -664,15 +701,24 @@ class Database:
         async with self.pool.acquire() as conn:
             result = await conn.execute("DELETE FROM force_join_groups WHERE chat_id = $1", chat_id)
             deleted_count = int(result.split()[-1]) if result else 0
+            if deleted_count > 0:
+                self._invalidate_cache('force_join_groups')  # Invalidate cache
             return deleted_count > 0
     
     async def get_force_join_groups(self) -> List[Dict]:
-        """Get all force join groups/channels"""
+        """Get all force join groups/channels (cached to reduce DB queries)"""
+        cache_key = 'force_join_groups'
+        cached = self._get_cache(cache_key)
+        if cached is not None:
+            return cached
+        
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM force_join_groups ORDER BY created_at")
-            return [dict(row) for row in rows]
+            groups = [dict(row) for row in rows]
+            self._set_cache(cache_key, groups, self._cache_ttl['force_join_groups'])
+            return groups
     
     async def get_force_join_count(self) -> int:
         """Get count of force join groups"""
