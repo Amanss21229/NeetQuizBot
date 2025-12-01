@@ -524,19 +524,19 @@ Let's ace NEET together! 🚀
             logger.info(f"Bot added to group: {chat.title} ({chat.id})")
 
     async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Automatically register any group where the bot sees activity"""
+        """Automatically register any group or channel where the bot sees activity"""
         chat = update.effective_chat
-        if chat and chat.type in ["group", "supergroup"]:
+        if chat and chat.type in ["group", "supergroup", "channel"]:
             # Add to in-memory cache (works even if DB fails)
             self.groups_cache[chat.id] = {
-                "title": chat.title or "Unknown Group",
+                "title": chat.title or "Unknown Group/Channel",
                 "type": chat.type
             }
             # Try to add to database (may fail if DB is down)
             try:
-                await db.add_group(chat.id, chat.title or "Unknown Group", chat.type)
+                await db.add_group(chat.id, chat.title or "Unknown Group/Channel", chat.type)
             except Exception as e:
-                logger.warning(f"Failed to add group to database: {e}")
+                logger.warning(f"Failed to add group/channel to database: {e}")
     
     async def handle_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz messages from admin group"""
@@ -663,7 +663,7 @@ Let's ace NEET together! 🚀
         logger.info(f"⏰ Quiz {quiz_id} scheduled for forwarding in 30 seconds")
     
     async def _forward_quiz_to_groups(self, context: ContextTypes.DEFAULT_TYPE):
-        """Forward quiz to all groups"""
+        """Forward quiz to all groups and channels"""
         try:
             # Get quiz_id from job data
             quiz_id = context.job.data['quiz_id']
@@ -686,25 +686,26 @@ Let's ace NEET together! 🚀
                 )
                 return
             
-            # Get all active groups
-            groups = await db.get_all_groups()
-            sent_count = 0
+            # Get all active groups and channels
+            all_chats = await db.get_all_groups()
+            group_count = 0
+            channel_count = 0
             
             poll = quiz_data['poll_object']
             options = quiz_data['options']
             
-            for group in groups:
-                if group['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
+            for chat in all_chats:
+                if chat['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
                     try:
-                        # Get language preference for this group
-                        group_language = await db.get_group_language(group['id'])
+                        # Get language preference for this chat
+                        chat_language = await db.get_group_language(chat['id'])
                         
                         # Determine question and options based on language
                         quiz_question = poll.question
                         quiz_options = options
                         
                         # Translate to Hindi if needed
-                        if group_language == 'hindi':
+                        if chat_language == 'hindi':
                             # Check if translation is cached
                             cache_key = (quiz_id, 'hindi')
                             if cache_key in self.translation_cache:
@@ -731,18 +732,18 @@ Let's ace NEET together! 🚀
                                         'question': quiz_question,
                                         'options': quiz_options
                                     }
-                                    logger.info(f"Translated quiz {quiz_id} to Hindi for group {group['id']}")
+                                    logger.info(f"Translated quiz {quiz_id} to Hindi for chat {chat['id']}")
                                     
                                 except Exception as translation_error:
                                     # Fallback to English if translation fails
                                     logger.error(f"Translation error for quiz {quiz_id}: {translation_error}")
-                                    logger.warning(f"Falling back to English for group {group['id']}")
+                                    logger.warning(f"Falling back to English for chat {chat['id']}")
                                     quiz_question = poll.question
                                     quiz_options = options
                         
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
-                            chat_id=group['id'],
+                            chat_id=chat['id'],
                             question=quiz_question,
                             options=quiz_options,
                             type='quiz',  # Always send as quiz for answer tracking
@@ -754,37 +755,42 @@ Let's ace NEET together! 🚀
                         # Store poll mapping for answer tracking
                         self.poll_mapping[sent_message.poll.id] = {
                             'quiz_id': quiz_id,
-                            'group_id': group['id'],
+                            'group_id': chat['id'],
                             'message_id': sent_message.message_id
                         }
 
-                        # ✅ Mapping store karo for /sol
+                        # Mapping store karo for /sol
                         self.quiz_mapping[sent_message.message_id] = quiz_id
 
-                        
-                        sent_count += 1
-                        logger.info(f"✅ Quiz sent to group {group['id']} with poll_id {sent_message.poll.id}")
+                        # Count groups and channels separately
+                        if chat.get('type') == 'channel':
+                            channel_count += 1
+                            logger.info(f"✅ Quiz sent to channel {chat['id']} with poll_id {sent_message.poll.id}")
+                        else:
+                            group_count += 1
+                            logger.info(f"✅ Quiz sent to group {chat['id']} with poll_id {sent_message.poll.id}")
                         
                     except Exception as e:
-                        logger.error(f"❌ Failed to send quiz to group {group['id']}: {e}")
+                        logger.error(f"❌ Failed to send quiz to chat {chat['id']}: {e}")
             
-            if sent_count > 0:
+            total_sent = group_count + channel_count
+            if total_sent > 0:
                 # Send confirmation to admin
                 option_letter = chr(65 + correct_option)  # Convert to A, B, C, D
-                confirmation = f"🎯 **Quiz Forwarded Successfully!**\n\n📊 Sent to {sent_count} groups\n✅ Correct Answer: **{option_letter}**"
+                confirmation = f"🎯 **Quiz Forwarded Successfully!**\n\n📊 Statistics:\n🏠 Groups: {group_count}\n📢 Channels: {channel_count}\n📈 Total: {total_sent}\n\n✅ Correct Answer: **{option_letter}**"
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
                     text=confirmation,
                     parse_mode='Markdown'
                 )
-                logger.info(f"🎯 Quiz '{poll.question[:50]}...' sent to {sent_count} groups successfully!")
+                logger.info(f"🎯 Quiz '{poll.question[:50]}...' sent to {group_count} groups and {channel_count} channels successfully!")
             else:
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
-                    text="⚠️ Quiz not sent to any groups - No active groups found!",
+                    text="⚠️ Quiz not sent - No active groups or channels found!",
                     parse_mode='Markdown'
                 )
-                logger.warning("⚠️ Quiz not sent to any groups")
+                logger.warning("⚠️ Quiz not sent to any groups or channels")
         
         except Exception as e:
             logger.error(f"Error forwarding quiz {quiz_id}: {e}")
@@ -872,7 +878,7 @@ Let's ace NEET together! 🚀
         
         # Send confirmation
         option_letter = chr(65 + correct_option_index)  # Convert to A, B, C, D
-        confirmation_text = f"✅ **Correct Answer Set!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n⏰ **Quiz will be forwarded to all groups in 30 seconds!**"
+        confirmation_text = f"✅ **Correct Answer Set!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n⏰ **Quiz will be forwarded to all groups and channels in 30 seconds!**"
         
         await message.reply_text(confirmation_text, parse_mode='Markdown')
         logger.info(f"🔧 Admin updated quiz {quiz_id_to_update} correct answer to option {correct_option_index} ({option_letter})")
