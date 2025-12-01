@@ -248,6 +248,108 @@ class NEETQuizBot:
         self.quiz_mapping = {}  # {forwarded_message_id: quiz_id}
         self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
+        self.broadcast_semaphore = asyncio.Semaphore(25)  # Limit concurrent sends to 25
+    
+    async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending"):
+        """
+        High-performance parallel message sender with rate limit handling.
+        
+        Args:
+            send_func: Async function that takes chat_id and returns True/False
+            chat_ids: List of chat IDs to send to
+            status_msg: Optional status message to update with progress
+            context: Bot context for status updates
+            label: Label for progress messages
+        
+        Returns:
+            Tuple of (success_count, failed_count, results_dict)
+        """
+        success_count = 0
+        failed_count = 0
+        results = {'groups': 0, 'channels': 0, 'users': 0, 'failed': 0}
+        total = len(chat_ids)
+        processed = 0
+        last_update = 0
+        
+        async def send_with_semaphore(chat_info):
+            nonlocal success_count, failed_count, processed, last_update, results
+            
+            async with self.broadcast_semaphore:
+                chat_id = chat_info['id'] if isinstance(chat_info, dict) else chat_info
+                chat_type = chat_info.get('type', 'user') if isinstance(chat_info, dict) else 'user'
+                
+                try:
+                    # Attempt to send
+                    success = await send_func(chat_id)
+                    if success:
+                        success_count += 1
+                        if chat_type == 'channel':
+                            results['channels'] += 1
+                        elif chat_type in ['group', 'supergroup']:
+                            results['groups'] += 1
+                        else:
+                            results['users'] += 1
+                    else:
+                        failed_count += 1
+                        results['failed'] += 1
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    # Handle rate limiting with exponential backoff
+                    if 'retry after' in error_msg or '429' in error_msg:
+                        try:
+                            # Extract retry time from error message
+                            retry_after = 1
+                            if 'retry after' in error_msg:
+                                parts = error_msg.split('retry after')
+                                if len(parts) > 1:
+                                    retry_after = int(''.join(filter(str.isdigit, parts[1][:10]))) or 1
+                            await asyncio.sleep(min(retry_after, 5))  # Max 5 seconds wait
+                            # Retry once
+                            try:
+                                success = await send_func(chat_id)
+                                if success:
+                                    success_count += 1
+                                    if chat_type == 'channel':
+                                        results['channels'] += 1
+                                    elif chat_type in ['group', 'supergroup']:
+                                        results['groups'] += 1
+                                    else:
+                                        results['users'] += 1
+                                else:
+                                    failed_count += 1
+                                    results['failed'] += 1
+                            except:
+                                failed_count += 1
+                                results['failed'] += 1
+                        except:
+                            failed_count += 1
+                            results['failed'] += 1
+                    else:
+                        failed_count += 1
+                        results['failed'] += 1
+                        logger.debug(f"Send failed to {chat_id}: {e}")
+                
+                processed += 1
+                
+                # Update status every 10% or 50 messages
+                if status_msg and context and (processed - last_update >= max(total // 10, 50)):
+                    last_update = processed
+                    progress_pct = int((processed / total) * 100)
+                    try:
+                        await status_msg.edit_text(
+                            f"📡 {label}...\n\n"
+                            f"⏳ Progress: {progress_pct}% ({processed}/{total})\n"
+                            f"✅ Sent: {success_count}\n"
+                            f"❌ Failed: {failed_count}"
+                        )
+                    except:
+                        pass  # Ignore edit errors
+        
+        # Create all tasks and run them concurrently
+        tasks = [send_with_semaphore(chat_info) for chat_info in chat_ids]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return success_count, failed_count, results
     
     async def check_force_join(self, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, List[Dict]]:
         """Check if user has joined all force join groups. Returns (is_joined, missing_groups)"""
@@ -1674,7 +1776,7 @@ Let's connect with Aman Directly, privately and securely!
             )
     
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /broadcast command (admin only)"""
+        """Handle /broadcast command (admin only) - FAST parallel sending"""
         user = update.effective_user
         
         # Check if user is admin
@@ -1694,45 +1796,52 @@ Let's connect with Aman Directly, privately and securely!
             groups = await db.get_all_groups()
             users = await db.get_all_users()
             
-            group_count = 0
-            user_count = 0
+            # Prepare user list with type info
+            user_list = [{'id': u['id'], 'type': 'user'} for u in users]
+            all_recipients = groups + user_list
+            
+            total_count = len(all_recipients)
             
             # Send initial status message
-            status_msg = await update.message.reply_text("📡 Broadcasting message...")
+            status_msg = await update.message.reply_text(
+                f"📡 Broadcasting to {total_count} recipients...\n\n"
+                f"🏠 Groups/Channels: {len(groups)}\n"
+                f"👥 Users: {len(users)}\n"
+                f"⏳ Please wait (this will be fast!)..."
+            )
             
-            # Broadcast to all groups
-            for group in groups:
-                try:
-                    await context.bot.copy_message(
-                        chat_id=group['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id,
-                        reply_markup=replied_message.reply_markup
-                    )
-                    group_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to broadcast to group {group['id']}: {e}")
+            # Define send function for parallel sending
+            async def send_broadcast(chat_id):
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=replied_message.chat_id,
+                    message_id=replied_message.message_id,
+                    reply_markup=replied_message.reply_markup
+                )
+                return True
             
-            # Broadcast to all users (private chats)
-            for user_data in users:
-                try:
-                    await context.bot.copy_message(
-                        chat_id=user_data['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id,
-                        reply_markup=replied_message.reply_markup
-                    )
-                    user_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to broadcast to user {user_data['id']}: {e}")
+            # Use parallel sender for fast broadcasting
+            start_time = asyncio.get_event_loop().time()
+            success_count, failed_count, results = await self._parallel_send(
+                send_broadcast, 
+                all_recipients, 
+                status_msg, 
+                context, 
+                "Broadcasting"
+            )
+            end_time = asyncio.get_event_loop().time()
+            duration = int(end_time - start_time)
             
             # Update status message with results
             await status_msg.edit_text(
                 f"✅ Broadcast Complete!\n\n"
                 f"📊 Statistics:\n"
-                f"👥 Users: {user_count}/{len(users)}\n"
-                f"🏠 Groups: {group_count}/{len(groups)}\n"
-                f"📈 Total: {user_count + group_count}"
+                f"🏠 Groups: {results['groups']}\n"
+                f"📢 Channels: {results['channels']}\n"
+                f"👥 Users: {results['users']}\n"
+                f"❌ Failed: {failed_count}\n"
+                f"📈 Total Sent: {success_count}/{total_count}\n\n"
+                f"⏱️ Time: {duration} seconds"
             )
             
         except Exception as e:
@@ -1740,7 +1849,7 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text("❌ Error occurred during broadcast.")
 
     async def pbroadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /pbroadcast command - Broadcast ONLY to users' private chats (admin only)"""
+        """Handle /pbroadcast command - Broadcast ONLY to users' private chats (admin only) - FAST parallel"""
         user = update.effective_user
         
         # Check if user is admin
@@ -1767,38 +1876,46 @@ Let's connect with Aman Directly, privately and securely!
                 await update.message.reply_text("❌ No users found in database.")
                 return
             
-            user_count = 0
-            failed_count = 0
+            # Prepare user list with type info
+            user_list = [{'id': u['id'], 'type': 'user'} for u in users]
             
             # Send initial status message
             status_msg = await update.message.reply_text(
-                f"📱 Private Broadcasting...\n\n"
-                f"👥 Total users: {len(users)}\n"
-                f"⏳ Sending to private chats only..."
+                f"📱 Private Broadcasting to {len(users)} users...\n\n"
+                f"⏳ Please wait (this will be fast!)..."
             )
             
-            # Broadcast to all users' private chats ONLY
-            for user_data in users:
-                try:
-                    await context.bot.copy_message(
-                        chat_id=user_data['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id,
-                        reply_markup=replied_message.reply_markup
-                    )
-                    user_count += 1
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(f"Failed to private broadcast to user {user_data['id']}: {e}")
+            # Define send function for parallel sending
+            async def send_private_broadcast(chat_id):
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=replied_message.chat_id,
+                    message_id=replied_message.message_id,
+                    reply_markup=replied_message.reply_markup
+                )
+                return True
+            
+            # Use parallel sender for fast broadcasting
+            start_time = asyncio.get_event_loop().time()
+            success_count, failed_count, results = await self._parallel_send(
+                send_private_broadcast, 
+                user_list, 
+                status_msg, 
+                context, 
+                "Private Broadcasting"
+            )
+            end_time = asyncio.get_event_loop().time()
+            duration = int(end_time - start_time)
             
             # Update status message with results
             await status_msg.edit_text(
                 f"✅ Private Broadcast Complete!\n\n"
                 f"📊 Statistics:\n"
-                f"✓ Successful: {user_count}/{len(users)}\n"
+                f"✓ Successful: {success_count}/{len(users)}\n"
                 f"✗ Failed: {failed_count}\n"
                 f"📱 Sent to: Users' Private Chats Only\n"
-                f"🏠 Groups: Not sent (private broadcast)"
+                f"🏠 Groups: Not sent (private broadcast)\n\n"
+                f"⏱️ Time: {duration} seconds"
             )
             
         except Exception as e:
@@ -1806,7 +1923,7 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text("❌ Error occurred during private broadcast.")
 
     async def forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /forward command - Forward message to all groups, channels, and users WITHOUT hiding sender name (admin only)"""
+        """Handle /forward command - Forward message to all groups, channels, and users WITHOUT hiding sender name (admin only) - FAST parallel"""
         user = update.effective_user
         
         if not await db.is_admin(user.id):
@@ -1828,49 +1945,50 @@ Let's connect with Aman Directly, privately and securely!
             groups = await db.get_all_groups()
             users = await db.get_all_users()
             
-            group_count = 0
-            user_count = 0
-            failed_groups = 0
-            failed_users = 0
+            # Prepare user list with type info
+            user_list = [{'id': u['id'], 'type': 'user'} for u in users]
+            all_recipients = groups + user_list
+            
+            total_count = len(all_recipients)
             
             status_msg = await update.message.reply_text(
-                f"📨 Forwarding message...\n\n"
-                f"👥 Total Users: {len(users)}\n"
-                f"🏠 Total Groups/Channels: {len(groups)}\n"
-                f"⏳ Please wait..."
+                f"📨 Forwarding to {total_count} recipients...\n\n"
+                f"🏠 Groups/Channels: {len(groups)}\n"
+                f"👥 Users: {len(users)}\n"
+                f"⏳ Please wait (this will be fast!)..."
             )
             
-            for group in groups:
-                try:
-                    await context.bot.forward_message(
-                        chat_id=group['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
-                    )
-                    group_count += 1
-                except Exception as e:
-                    failed_groups += 1
-                    logger.error(f"Failed to forward to group {group['id']}: {e}")
+            # Define send function for parallel sending
+            async def send_forward(chat_id):
+                await context.bot.forward_message(
+                    chat_id=chat_id,
+                    from_chat_id=replied_message.chat_id,
+                    message_id=replied_message.message_id
+                )
+                return True
             
-            for user_data in users:
-                try:
-                    await context.bot.forward_message(
-                        chat_id=user_data['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
-                    )
-                    user_count += 1
-                except Exception as e:
-                    failed_users += 1
-                    logger.error(f"Failed to forward to user {user_data['id']}: {e}")
+            # Use parallel sender for fast forwarding
+            start_time = asyncio.get_event_loop().time()
+            success_count, failed_count, results = await self._parallel_send(
+                send_forward, 
+                all_recipients, 
+                status_msg, 
+                context, 
+                "Forwarding"
+            )
+            end_time = asyncio.get_event_loop().time()
+            duration = int(end_time - start_time)
             
             await status_msg.edit_text(
                 f"✅ Forward Complete!\n\n"
                 f"📊 Statistics:\n"
-                f"👥 Users: {user_count}/{len(users)} (Failed: {failed_users})\n"
-                f"🏠 Groups/Channels: {group_count}/{len(groups)} (Failed: {failed_groups})\n"
-                f"📈 Total Sent: {user_count + group_count}\n\n"
-                f"👤 Sender name: Visible"
+                f"🏠 Groups: {results['groups']}\n"
+                f"📢 Channels: {results['channels']}\n"
+                f"👥 Users: {results['users']}\n"
+                f"❌ Failed: {failed_count}\n"
+                f"📈 Total Sent: {success_count}/{total_count}\n\n"
+                f"👤 Sender name: Visible\n"
+                f"⏱️ Time: {duration} seconds"
             )
             
         except Exception as e:
@@ -1878,7 +1996,7 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text("❌ Error occurred during forwarding.")
 
     async def emergency_broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database"""
+        """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database - FAST parallel"""
         user = update.effective_user
     
         # Hardcoded admin check (works even if DB is down)
@@ -1907,36 +2025,47 @@ Let's connect with Aman Directly, privately and securely!
                 )
                 return
         
-            broadcast_count = 0
-            failed_count = 0
+            # Prepare cache list for parallel sending
+            cache_list = [{'id': gid, 'type': info.get('type', 'group')} for gid, info in self.groups_cache.items()]
         
             status_msg = await update.message.reply_text(
                 f"🔄 **Emergency Broadcast Started**\n\n"
                 f"📊 Groups in cache: {len(self.groups_cache)}\n"
-                f"⏳ Sending messages..."
+                f"⏳ Sending messages (fast mode)..."
             )
-        
-            # Broadcast to all groups in cache
-            for group_id, group_info in self.groups_cache.items():
-                try:
-                    await context.bot.copy_message(
-                        chat_id=group_id,
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id
-                    )
-                    broadcast_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to emergency broadcast to group {group_id}: {e}")
-                    failed_count += 1
+            
+            # Define send function for parallel sending
+            async def send_emergency(chat_id):
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=replied_message.chat_id,
+                    message_id=replied_message.message_id
+                )
+                return True
+            
+            # Use parallel sender for fast broadcasting
+            start_time = asyncio.get_event_loop().time()
+            success_count, failed_count, results = await self._parallel_send(
+                send_emergency, 
+                cache_list, 
+                status_msg, 
+                context, 
+                "Emergency Broadcasting"
+            )
+            end_time = asyncio.get_event_loop().time()
+            duration = int(end_time - start_time)
         
             # Update status
             await status_msg.edit_text(
                 f"✅ **Emergency Broadcast Complete!**\n\n"
                 f"📊 **Statistics:**\n"
-                f"   ✅ Successful: {broadcast_count}\n"
+                f"   🏠 Groups: {results['groups']}\n"
+                f"   📢 Channels: {results['channels']}\n"
+                f"   ✅ Successful: {success_count}\n"
                 f"   ❌ Failed: {failed_count}\n"
-                f"   📝 Total groups in cache: {len(self.groups_cache)}\n\n"
-                f"⚠️ **Note:** This used in-memory cache (no database required)"
+                f"   📝 Total in cache: {len(self.groups_cache)}\n\n"
+                f"⏱️ Time: {duration} seconds\n"
+                f"⚠️ **Note:** Used in-memory cache (no database required)"
             )
         
         except Exception as e:
@@ -1947,7 +2076,7 @@ Let's connect with Aman Directly, privately and securely!
             )
     
     async def gbroadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /gbroadcast command - Broadcast ONLY to groups and channels (admin only)"""
+        """Handle /gbroadcast command - Broadcast ONLY to groups and channels (admin only) - FAST parallel"""
         user = update.effective_user
         
         if not await db.is_admin(user.id):
@@ -1971,35 +2100,42 @@ Let's connect with Aman Directly, privately and securely!
                 await update.message.reply_text("❌ No groups found in database.")
                 return
             
-            group_count = 0
-            failed_count = 0
-            
             status_msg = await update.message.reply_text(
-                f"🏢 Group Broadcasting...\n\n"
-                f"📊 Total groups: {len(groups)}\n"
-                f"⏳ Sending to groups and channels only..."
+                f"🏢 Group Broadcasting to {len(groups)} groups/channels...\n\n"
+                f"⏳ Please wait (this will be fast!)..."
             )
             
-            for group in groups:
-                try:
-                    await context.bot.copy_message(
-                        chat_id=group['id'],
-                        from_chat_id=replied_message.chat_id,
-                        message_id=replied_message.message_id,
-                        reply_markup=replied_message.reply_markup
-                    )
-                    group_count += 1
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(f"Failed to group broadcast to {group['id']}: {e}")
+            # Define send function for parallel sending
+            async def send_group_broadcast(chat_id):
+                await context.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=replied_message.chat_id,
+                    message_id=replied_message.message_id,
+                    reply_markup=replied_message.reply_markup
+                )
+                return True
+            
+            # Use parallel sender for fast broadcasting
+            start_time = asyncio.get_event_loop().time()
+            success_count, failed_count, results = await self._parallel_send(
+                send_group_broadcast, 
+                groups, 
+                status_msg, 
+                context, 
+                "Group Broadcasting"
+            )
+            end_time = asyncio.get_event_loop().time()
+            duration = int(end_time - start_time)
             
             await status_msg.edit_text(
                 f"✅ Group Broadcast Complete!\n\n"
                 f"📊 Statistics:\n"
-                f"✓ Successful: {group_count}/{len(groups)}\n"
-                f"✗ Failed: {failed_count}\n"
-                f"🏢 Sent to: Groups & Channels Only\n"
-                f"👤 Private Chats: Not sent (group broadcast)"
+                f"🏠 Groups: {results['groups']}\n"
+                f"📢 Channels: {results['channels']}\n"
+                f"❌ Failed: {failed_count}\n"
+                f"📈 Total Sent: {success_count}/{len(groups)}\n\n"
+                f"👤 Private Chats: Not sent (group broadcast)\n"
+                f"⏱️ Time: {duration} seconds"
             )
             
         except Exception as e:
