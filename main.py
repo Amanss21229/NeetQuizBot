@@ -384,6 +384,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("ebroadcast", self.emergency_broadcast_command))
         self.application.add_handler(CommandHandler("fjoin", self.fjoin_command))
         self.application.add_handler(CommandHandler("removefjoin", self.removefjoin_command))
+        self.application.add_handler(CommandHandler("forward", self.forward_command))
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
@@ -447,6 +448,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("addpositivereply", "Add positive reply"),
             BotCommand("addnegativereply", "Add negative reply"),
             BotCommand("removereply", "Remove custom reply"),
+            BotCommand("forward", "Forward message to all (shows sender)"),
         ]
         
         await self.application.bot.set_my_commands(commands)
@@ -1796,6 +1798,78 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Private broadcast error: {e}")
             await update.message.reply_text("❌ Error occurred during private broadcast.")
+
+    async def forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /forward command - Forward message to all groups, channels, and users WITHOUT hiding sender name (admin only)"""
+        user = update.effective_user
+        
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+        
+        if not update.message.reply_to_message:
+            await update.message.reply_text(
+                "❌ Please reply to any message to forward it.\n\n"
+                "📨 This will FORWARD the message to all groups, channels, and users.\n"
+                "👤 Sender's name will be visible (not hidden).\n\n"
+                "✅ Supports: Text, Images, Videos, Emojis, Stickers, Polls, Files, Links, and all media types."
+            )
+            return
+        
+        replied_message = update.message.reply_to_message
+        
+        try:
+            groups = await db.get_all_groups()
+            users = await db.get_all_users()
+            
+            group_count = 0
+            user_count = 0
+            failed_groups = 0
+            failed_users = 0
+            
+            status_msg = await update.message.reply_text(
+                f"📨 Forwarding message...\n\n"
+                f"👥 Total Users: {len(users)}\n"
+                f"🏠 Total Groups/Channels: {len(groups)}\n"
+                f"⏳ Please wait..."
+            )
+            
+            for group in groups:
+                try:
+                    await context.bot.forward_message(
+                        chat_id=group['id'],
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    group_count += 1
+                except Exception as e:
+                    failed_groups += 1
+                    logger.error(f"Failed to forward to group {group['id']}: {e}")
+            
+            for user_data in users:
+                try:
+                    await context.bot.forward_message(
+                        chat_id=user_data['id'],
+                        from_chat_id=replied_message.chat_id,
+                        message_id=replied_message.message_id
+                    )
+                    user_count += 1
+                except Exception as e:
+                    failed_users += 1
+                    logger.error(f"Failed to forward to user {user_data['id']}: {e}")
+            
+            await status_msg.edit_text(
+                f"✅ Forward Complete!\n\n"
+                f"📊 Statistics:\n"
+                f"👥 Users: {user_count}/{len(users)} (Failed: {failed_users})\n"
+                f"🏠 Groups/Channels: {group_count}/{len(groups)} (Failed: {failed_groups})\n"
+                f"📈 Total Sent: {user_count + group_count}\n\n"
+                f"👤 Sender name: Visible"
+            )
+            
+        except Exception as e:
+            logger.error(f"Forward error: {e}")
+            await update.message.reply_text("❌ Error occurred during forwarding.")
 
     async def emergency_broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /emergencybroadcast or /ebroadcast command - works WITHOUT database"""
