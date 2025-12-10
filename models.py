@@ -389,6 +389,26 @@ class Database:
             """, limit)
             return [dict(row) for row in rows]
     
+    async def get_daily_universal_leaderboard(self, limit: int = 50) -> List[Dict]:
+        """Get universal leaderboard based on last 24 hours scores only"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT u.id, u.username, u.first_name, u.last_name,
+                       COALESCE(SUM(uqs.points), 0) as score,
+                       COUNT(CASE WHEN uqs.points = 4 THEN 1 END) as correct,
+                       COUNT(CASE WHEN uqs.points = -1 THEN 1 END) as wrong
+                FROM users u
+                JOIN user_quiz_scores uqs ON u.id = uqs.user_id
+                WHERE uqs.answered_at >= NOW() - INTERVAL '24 hours'
+                GROUP BY u.id, u.username, u.first_name, u.last_name
+                HAVING COALESCE(SUM(uqs.points), 0) > 0
+                ORDER BY score DESC, correct DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+    
     async def get_all_groups(self) -> List[Dict]:
         """Get all active groups"""
         if not self.pool:

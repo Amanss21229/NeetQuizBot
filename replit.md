@@ -4,6 +4,11 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-12-10: Changed Universal Leaderboard from Weekly to Daily (Last 24 Hours)
+  - Daily leaderboard at 10:00 PM IST now shows scores from last 24 hours only
+  - New database function: get_daily_universal_leaderboard() calculates scores from answered_at timestamp
+  - Message text updated to clearly indicate "Last 24 Hours" instead of weekly scores
+  - Both group and private chat leaderboards use daily scores
 - 2025-12-10: Added Daily Wrong Quiz Summary Feature
   - New command: /mymistake - View today's wrong answered questions
   - In groups: Shows button to redirect user to private chat

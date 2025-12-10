@@ -3112,14 +3112,14 @@ Let's connect with Aman Directly, privately and securely!
             logger.info(f"Callback query: {query.data}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
-        """Send daily leaderboards at 10:00 PM IST to groups and users' private chats"""
+        """Send daily leaderboards at 10:00 PM IST to groups and users' private chats - shows last 24 hours scores"""
         try:
             groups = await db.get_all_groups()
             all_users = await db.get_all_users()
             
-            # Precompute universal ranks once for efficiency (avoid N+1 queries)
-            universal_leaderboard = await db.get_universal_leaderboard(1000)  # Get top 1000
-            universal_rank_map = {user['id']: idx + 1 for idx, user in enumerate(universal_leaderboard)}
+            # Precompute daily universal ranks (last 24 hours) for efficiency
+            daily_universal_leaderboard = await db.get_daily_universal_leaderboard(1000)  # Get top 1000
+            daily_rank_map = {user['id']: idx + 1 for idx, user in enumerate(daily_universal_leaderboard)}
             
             # Send group-specific leaderboards to groups
             for group in groups:
@@ -3143,19 +3143,19 @@ Let's connect with Aman Directly, privately and securely!
                         wrong = user['wrong']
                         unattempted = user['unattempted']
                         
-                        # Get universal rank from precomputed map
-                        universal_rank = universal_rank_map.get(user['id'], 'N/A')
+                        # Get daily universal rank from precomputed map
+                        daily_rank = daily_rank_map.get(user['id'], 'N/A')
                         
                         rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
                         
                         group_text += f"{rank_emoji} [{name}](tg://user?id={user['id']}) - {score} pts\n"
                         group_text += f"   ✅ {correct} | ❌ {wrong} | ⭕ {unattempted}\n"
                         
-                        # Show universal rank with appropriate formatting
-                        if universal_rank != 'N/A':
-                            group_text += f"   🌍 Universal Rank: #{universal_rank}\n\n"
+                        # Show daily universal rank with appropriate formatting
+                        if daily_rank != 'N/A':
+                            group_text += f"   🌍 Daily Rank: #{daily_rank}\n\n"
                         else:
-                            group_text += f"   🌍 Universal Rank: {universal_rank}\n\n"
+                            group_text += f"   🌍 Daily Rank: {daily_rank}\n\n"
                     
                     bot = context.bot if context else self.application.bot
                     await bot.send_message(
@@ -3164,14 +3164,14 @@ Let's connect with Aman Directly, privately and securely!
                         parse_mode='Markdown'
                     )
                     
-                    # Universal leaderboard
-                    universal_leaderboard = await db.get_universal_leaderboard(50)
+                    # Daily Universal leaderboard (last 24 hours)
+                    daily_leaderboard = await db.get_daily_universal_leaderboard(50)
                     
-                    if universal_leaderboard:
-                        universal_text = "🌍 **Universal Leaderboard (Top 50)**\n"
-                        universal_text += f"📅 Date: {datetime.now(TIMEZONE).strftime('%Y-%m-%d')}\n\n"
+                    if daily_leaderboard:
+                        universal_text = "🌍 **Daily Universal Leaderboard (Top 50)**\n"
+                        universal_text += f"📅 Last 24 Hours - {datetime.now(TIMEZONE).strftime('%Y-%m-%d')}\n\n"
                         
-                        for i, user in enumerate(universal_leaderboard, 1):
+                        for i, user in enumerate(daily_leaderboard, 1):
                             name = user['first_name'] or 'Unknown'
                             score = user['score']
                             
@@ -3188,18 +3188,18 @@ Let's connect with Aman Directly, privately and securely!
                 except Exception as e:
                     logger.error(f"Error sending leaderboard to group {group['id']}: {e}")
             
-            # Send universal leaderboard to all users' private chats
-            universal_leaderboard_top50 = await db.get_universal_leaderboard(50)
+            # Send daily universal leaderboard to all users' private chats
+            daily_leaderboard_top50 = await db.get_daily_universal_leaderboard(50)
             
-            if universal_leaderboard_top50:
+            if daily_leaderboard_top50:
                 bot = context.bot if context else self.application.bot
                 
-                # Build universal leaderboard message for users
-                user_universal_text = "🌍 **UNIVERSAL LEADERBOARD (Top 50)**\n"
-                user_universal_text += f"📅 Date: {datetime.now(TIMEZONE).strftime('%Y-%m-%d')}\n"
+                # Build daily universal leaderboard message for users
+                user_universal_text = "🌍 **DAILY UNIVERSAL LEADERBOARD (Top 50)**\n"
+                user_universal_text += f"📅 Last 24 Hours - {datetime.now(TIMEZONE).strftime('%Y-%m-%d')}\n"
                 user_universal_text += f"🕙 Daily Update - 10:00 PM IST\n\n"
                 
-                for i, user in enumerate(universal_leaderboard_top50, 1):
+                for i, user in enumerate(daily_leaderboard_top50, 1):
                     name = user['first_name'] or 'Unknown'
                     score = user['score']
                     
@@ -3207,7 +3207,7 @@ Let's connect with Aman Directly, privately and securely!
                     
                     user_universal_text += f"{rank_emoji} {name} - {score} pts\n"
                 
-                user_universal_text += "\n🎯 Keep practicing to improve your rank!\n"
+                user_universal_text += "\n🎯 Keep practicing to improve your daily rank!\n"
                 user_universal_text += "🤖 @DrQuizRobot"
                 
                 # Send to all users
