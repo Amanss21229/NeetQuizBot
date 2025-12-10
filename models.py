@@ -217,6 +217,25 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            
+            # Sent Messages table for tracking broadcast messages (for /delete command)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS sent_messages (
+                    id SERIAL PRIMARY KEY,
+                    original_message_id BIGINT NOT NULL,
+                    original_chat_id BIGINT NOT NULL,
+                    sent_message_id BIGINT NOT NULL,
+                    sent_chat_id BIGINT NOT NULL,
+                    sent_by BIGINT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            # Create index for faster lookups
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sent_messages_original 
+                ON sent_messages(original_message_id, original_chat_id)
+            """)
 
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
@@ -808,6 +827,39 @@ class Database:
                   AND answered_at <= $2
             """, day_start_utc, day_end_utc)
             return [row['user_id'] for row in rows]
+    
+    async def store_sent_message(self, original_message_id: int, original_chat_id: int, 
+                                  sent_message_id: int, sent_chat_id: int, sent_by: int):
+        """Store a sent message mapping for later deletion"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO sent_messages (original_message_id, original_chat_id, sent_message_id, sent_chat_id, sent_by)
+                VALUES ($1, $2, $3, $4, $5)
+            """, original_message_id, original_chat_id, sent_message_id, sent_chat_id, sent_by)
+    
+    async def get_sent_messages(self, original_message_id: int, original_chat_id: int) -> List[Dict]:
+        """Get all sent messages for a given original message"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT sent_message_id, sent_chat_id
+                FROM sent_messages
+                WHERE original_message_id = $1 AND original_chat_id = $2
+            """, original_message_id, original_chat_id)
+            return [dict(row) for row in rows]
+    
+    async def delete_sent_message_records(self, original_message_id: int, original_chat_id: int):
+        """Delete all sent message records for a given original message"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                DELETE FROM sent_messages
+                WHERE original_message_id = $1 AND original_chat_id = $2
+            """, original_message_id, original_chat_id)
 
 # Global database instance
 db = Database()
