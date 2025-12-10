@@ -760,9 +760,9 @@ class Database:
         day_start_ist = ist.localize(datetime(date.year, date.month, date.day, 0, 0, 0))
         day_end_ist = ist.localize(datetime(date.year, date.month, date.day, 23, 59, 59))
         
-        # Convert to UTC for database query
-        day_start_utc = day_start_ist.astimezone(pytz.UTC)
-        day_end_utc = day_end_ist.astimezone(pytz.UTC)
+        # Convert to naive UTC for asyncpg compatibility
+        day_start_utc = day_start_ist.astimezone(pytz.UTC).replace(tzinfo=None)
+        day_end_utc = day_end_ist.astimezone(pytz.UTC).replace(tzinfo=None)
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -795,9 +795,9 @@ class Database:
         day_start_ist = ist.localize(datetime(date.year, date.month, date.day, 0, 0, 0))
         day_end_ist = ist.localize(datetime(date.year, date.month, date.day, 23, 59, 59))
         
-        # Convert to UTC for database query
-        day_start_utc = day_start_ist.astimezone(pytz.UTC)
-        day_end_utc = day_end_ist.astimezone(pytz.UTC)
+        # Convert to naive UTC for asyncpg compatibility
+        day_start_utc = day_start_ist.astimezone(pytz.UTC).replace(tzinfo=None)
+        day_end_utc = day_end_ist.astimezone(pytz.UTC).replace(tzinfo=None)
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
