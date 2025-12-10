@@ -451,6 +451,13 @@ Hello! To use this bot, you need to join our official groups/channels first.
             days=(6,),  # Sunday (0=Monday, 6=Sunday)
             name="weekly_reset"
         )
+        
+        # Schedule daily wrong quiz summary at 10:10 PM IST
+        self.application.job_queue.run_daily(
+            callback=self.send_daily_wrong_quiz_summary,
+            time=time(hour=22, minute=10, tzinfo=TIMEZONE),  # 10:10 PM IST
+            name="daily_wrong_quiz_summary"
+        )
 
     
     def _register_handlers(self):
@@ -461,6 +468,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("donate", self.donate_command))
         self.application.add_handler(CommandHandler("developer", self.developer_command))
         self.application.add_handler(CommandHandler("myscore", self.myscore_command))
+        self.application.add_handler(CommandHandler("mymistake", self.mymistake_command))
         self.application.add_handler(CommandHandler("leaderboard", self.leaderboard_command))
         self.application.add_handler(CommandHandler("sol", self.get_solution))
         self.application.add_handler(CommandHandler("promotion", self.promotion_command))
@@ -535,6 +543,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("myscore", "View your achievement report"),
             BotCommand("leaderboard", "Show group leaderboard"),
             BotCommand("sol", "Show Detail Solution"),
+            BotCommand("mymistake", "View today's wrong answers"),
         ]
         
         admin_commands = [
@@ -579,6 +588,39 @@ Hello! To use this bot, you need to join our official groups/channels first.
         if chat.type in ['group', 'supergroup']:
             await db.add_group(chat.id, chat.title, chat.type)
             await db.add_group_member(user.id, chat.id)
+        
+        # Handle deep link parameters (e.g., /start mymistake)
+        if context.args and len(context.args) > 0:
+            deep_link_param = context.args[0].lower()
+            
+            if deep_link_param == 'mymistake':
+                # User clicked button from group - show their wrong answers
+                try:
+                    today = datetime.now(TIMEZONE)
+                    wrong_quizzes = await db.get_user_daily_wrong_answers(user.id, today)
+                    
+                    if not wrong_quizzes:
+                        await update.message.reply_text(
+                            "🎉 *Congratulations!*\n\n"
+                            "✅ Aaj aapne koi galat answer nahi diya!\n"
+                            "🏆 Keep up the great work!\n\n"
+                            "🤖 @DrQuizRobot",
+                            parse_mode='Markdown'
+                        )
+                        return
+                    
+                    message = await self.format_wrong_quizzes_message(wrong_quizzes, user.first_name)
+                    await update.message.reply_text(message, parse_mode='Markdown')
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"Error in start mymistake deep link: {e}")
+                    await update.message.reply_text(
+                        "❌ Error fetching your wrong answers!\n"
+                        "Please try /mymistake command instead.",
+                        parse_mode='Markdown'
+                    )
+                    return
         
         # Create inline keyboard
         keyboard = [
@@ -1599,6 +1641,181 @@ Let's connect with Aman Directly, privately and securely!
                 "Please try again later\\.",
                 parse_mode='MarkdownV2'
             )
+    
+    async def format_wrong_quizzes_message(self, wrong_quizzes: List[Dict], user_name: str) -> str:
+        """Format wrong quizzes into a nice message"""
+        if not wrong_quizzes:
+            return None
+        
+        today_date = datetime.now(TIMEZONE).strftime('%d %B %Y')
+        
+        message = f"""
+📚 *𝗔𝗔𝗝 𝗞𝗜 𝗚𝗔𝗟𝗧𝗜𝗬𝗔𝗔𝗡* 📚
+
+👤 *{user_name}*
+📅 *{today_date}*
+❌ *Wrong Answers:* {len(wrong_quizzes)}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        
+        for i, quiz in enumerate(wrong_quizzes, 1):
+            question = quiz['quiz_text']
+            if len(question) > 200:
+                question = question[:197] + "..."
+            
+            options = quiz['options'] if isinstance(quiz['options'], list) else []
+            correct_option = quiz['correct_option']
+            selected_option = quiz['selected_option']
+            
+            correct_letter = chr(65 + correct_option) if correct_option >= 0 else "?"
+            selected_letter = chr(65 + selected_option) if selected_option >= 0 else "?"
+            
+            correct_answer = options[correct_option] if 0 <= correct_option < len(options) else "Unknown"
+            selected_answer = options[selected_option] if 0 <= selected_option < len(options) else "Unknown"
+            
+            message += f"""
+🔢 *Question {i}:*
+{question}
+
+❌ *Tumhara Answer:* {selected_letter}) {selected_answer}
+✅ *Sahi Answer:* {correct_letter}) {correct_answer}
+
+─────────────────────────────────
+"""
+        
+        message += """
+💡 *Tip:* In questions ko dobara revise karo!
+🎯 *Tomorrow try again and score better!*
+
+🤖 @DrQuizRobot
+⚡ Powered By Sansa
+"""
+        return message
+    
+    async def send_wrong_quizzes_to_user(self, context: ContextTypes.DEFAULT_TYPE, user_id: int, wrong_quizzes: List[Dict], user_name: str):
+        """Send wrong quizzes to a user in private chat"""
+        try:
+            message = await self.format_wrong_quizzes_message(wrong_quizzes, user_name)
+            if message:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    parse_mode='Markdown'
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error sending wrong quizzes to user {user_id}: {e}")
+        return False
+    
+    async def mymistake_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /mymistake command - show user's wrong answers for today"""
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Check force join (not for admins)
+        if not await db.is_admin(user.id):
+            is_joined, missing_groups = await self.check_force_join(user.id, context)
+            if not is_joined:
+                await self.send_force_join_message(update, context, user.id, missing_groups)
+                return
+        
+        # If used in a group, send button to redirect to private chat
+        if chat.type != 'private':
+            bot_username = (await context.bot.get_me()).username
+            keyboard = [
+                [InlineKeyboardButton(
+                    "📩 Check Wrong Answers in Private Chat",
+                    url=f"https://t.me/{bot_username}?start=mymistake"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"👋 *Hey {user.first_name}!*\n\n"
+                "📚 Aapki aaj ki wrong answers private chat me milegi!\n"
+                "👇 Neeche button click karo:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return
+        
+        # In private chat, show wrong quizzes
+        try:
+            today = datetime.now(TIMEZONE)
+            wrong_quizzes = await db.get_user_daily_wrong_answers(user.id, today)
+            
+            if not wrong_quizzes:
+                await update.message.reply_text(
+                    "🎉 *Congratulations!*\n\n"
+                    "✅ Aaj aapne koi galat answer nahi diya!\n"
+                    "🏆 Keep up the great work!\n\n"
+                    "🤖 @DrQuizRobot",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            message = await self.format_wrong_quizzes_message(wrong_quizzes, user.first_name)
+            await update.message.reply_text(message, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in mymistake command: {e}")
+            await update.message.reply_text(
+                "❌ Error fetching your wrong answers!\n"
+                "Please try again later.",
+                parse_mode='Markdown'
+            )
+    
+    async def send_daily_wrong_quiz_summary(self, context: ContextTypes.DEFAULT_TYPE):
+        """Scheduled job to send daily wrong quiz summary to all users at 10:10 PM IST"""
+        logger.info("🔔 Starting daily wrong quiz summary...")
+        
+        try:
+            today = datetime.now(TIMEZONE)
+            
+            # Get all users who have wrong answers today
+            users_with_wrong = await db.get_users_with_wrong_answers_today(today)
+            
+            if not users_with_wrong:
+                logger.info("No users with wrong answers today")
+                return
+            
+            logger.info(f"Found {len(users_with_wrong)} users with wrong answers today")
+            
+            success_count = 0
+            failed_count = 0
+            
+            for user_id in users_with_wrong:
+                try:
+                    # Get user's wrong quizzes
+                    wrong_quizzes = await db.get_user_daily_wrong_answers(user_id, today)
+                    
+                    if not wrong_quizzes:
+                        continue
+                    
+                    # Get user data for name
+                    user_data = await db.get_user(user_id)
+                    user_name = user_data.get('first_name', 'Student') if user_data else 'Student'
+                    
+                    # Send wrong quizzes to user
+                    success = await self.send_wrong_quizzes_to_user(context, user_id, wrong_quizzes, user_name)
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                    
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    logger.error(f"Error sending daily summary to user {user_id}: {e}")
+                    failed_count += 1
+            
+            logger.info(f"✅ Daily wrong quiz summary completed: {success_count} sent, {failed_count} failed")
+            
+        except Exception as e:
+            logger.error(f"Error in daily wrong quiz summary: {e}")
     
     async def leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /leaderboard command - show current group leaderboard with universal ranks"""

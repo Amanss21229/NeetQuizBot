@@ -726,6 +726,68 @@ class Database:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM force_join_groups")
+    
+    async def get_user_daily_wrong_answers(self, user_id: int, date: datetime) -> List[Dict]:
+        """Get all unique wrong answers for a user on a specific date (Indian timezone)"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        
+        # Calculate start and end of the day in UTC (from IST)
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        
+        # Create start and end of day in IST
+        day_start_ist = ist.localize(datetime(date.year, date.month, date.day, 0, 0, 0))
+        day_end_ist = ist.localize(datetime(date.year, date.month, date.day, 23, 59, 59))
+        
+        # Convert to UTC for database query
+        day_start_utc = day_start_ist.astimezone(pytz.UTC)
+        day_end_utc = day_end_ist.astimezone(pytz.UTC)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (q.id) 
+                    q.id as quiz_id,
+                    q.quiz_text,
+                    q.options,
+                    q.correct_option,
+                    uqs.selected_option,
+                    uqs.answered_at
+                FROM user_quiz_scores uqs
+                JOIN quizzes q ON uqs.quiz_id = q.id
+                WHERE uqs.user_id = $1 
+                  AND uqs.points = -1
+                  AND uqs.answered_at >= $2
+                  AND uqs.answered_at <= $3
+                ORDER BY q.id, uqs.answered_at DESC
+            """, user_id, day_start_utc, day_end_utc)
+            return [dict(row) for row in rows]
+    
+    async def get_users_with_wrong_answers_today(self, date: datetime) -> List[int]:
+        """Get list of user IDs who have wrong answers today"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        
+        # Create start and end of day in IST
+        day_start_ist = ist.localize(datetime(date.year, date.month, date.day, 0, 0, 0))
+        day_end_ist = ist.localize(datetime(date.year, date.month, date.day, 23, 59, 59))
+        
+        # Convert to UTC for database query
+        day_start_utc = day_start_ist.astimezone(pytz.UTC)
+        day_end_utc = day_end_ist.astimezone(pytz.UTC)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT user_id
+                FROM user_quiz_scores
+                WHERE points = -1
+                  AND answered_at >= $1
+                  AND answered_at <= $2
+            """, day_start_utc, day_end_utc)
+            return [row['user_id'] for row in rows]
 
 # Global database instance
 db = Database()
