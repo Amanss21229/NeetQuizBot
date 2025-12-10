@@ -4,6 +4,15 @@
 A comprehensive Telegram bot for NEET students featuring automatic quiz forwarding, real-time scoring, daily leaderboards, and complete admin management. Built using Python with python-telegram-bot v20+ and PostgreSQL database.
 
 ## Recent Changes
+- 2025-12-10: Added Daily Wrong Quiz Summary Feature
+  - New command: /mymistake - View today's wrong answered questions
+  - In groups: Shows button to redirect user to private chat
+  - In private chat: Displays all wrong quizzes with correct answers
+  - Deep link support: /start mymistake for seamless group-to-private redirection
+  - Scheduled job at 10:10 PM IST sends daily wrong quiz summary to all users
+  - Unique quizzes only (no duplicates) with DISTINCT ON clause
+  - Shows question, user's wrong answer, and correct answer for each quiz
+  - Hinglish messages for better user engagement
 - 2025-12-01: High-Speed Broadcast and Forward System
   - Implemented parallel message sending with asyncio (25 concurrent sends)
   - Broadcast/forward operations now complete in 5-10 minutes instead of 1+ hour
