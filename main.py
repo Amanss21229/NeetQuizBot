@@ -250,16 +250,21 @@ class NEETQuizBot:
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
         self.broadcast_semaphore = asyncio.Semaphore(25)  # Limit concurrent sends to 25
     
-    async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending"):
+    async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
+                             track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
         """
         High-performance parallel message sender with rate limit handling.
         
         Args:
-            send_func: Async function that takes chat_id and returns True/False
+            send_func: Async function that takes chat_id and returns MessageId object or True/False
             chat_ids: List of chat IDs to send to
             status_msg: Optional status message to update with progress
             context: Bot context for status updates
             label: Label for progress messages
+            track_messages: If True, store sent message mappings for /delete command
+            original_message_id: Original message ID (required if track_messages=True)
+            original_chat_id: Original chat ID (required if track_messages=True)
+            sent_by: User ID who sent the broadcast (required if track_messages=True)
         
         Returns:
             Tuple of (success_count, failed_count, results_dict)
@@ -280,7 +285,8 @@ class NEETQuizBot:
                 
                 try:
                     # Attempt to send
-                    success = await send_func(chat_id)
+                    result = await send_func(chat_id)
+                    success = result is not None and result is not False
                     if success:
                         success_count += 1
                         if chat_type == 'channel':
@@ -289,6 +295,18 @@ class NEETQuizBot:
                             results['groups'] += 1
                         else:
                             results['users'] += 1
+                        
+                        # Track sent message for /delete command
+                        if track_messages and original_message_id and original_chat_id:
+                            try:
+                                sent_msg_id = result.message_id if hasattr(result, 'message_id') else result
+                                if isinstance(sent_msg_id, int):
+                                    await db.store_sent_message(
+                                        original_message_id, original_chat_id,
+                                        sent_msg_id, chat_id, sent_by
+                                    )
+                            except Exception as track_err:
+                                logger.debug(f"Failed to track message: {track_err}")
                     else:
                         failed_count += 1
                         results['failed'] += 1
@@ -306,7 +324,8 @@ class NEETQuizBot:
                             await asyncio.sleep(min(retry_after, 5))  # Max 5 seconds wait
                             # Retry once
                             try:
-                                success = await send_func(chat_id)
+                                result = await send_func(chat_id)
+                                success = result is not None and result is not False
                                 if success:
                                     success_count += 1
                                     if chat_type == 'channel':
@@ -315,6 +334,18 @@ class NEETQuizBot:
                                         results['groups'] += 1
                                     else:
                                         results['users'] += 1
+                                    
+                                    # Track sent message for /delete command
+                                    if track_messages and original_message_id and original_chat_id:
+                                        try:
+                                            sent_msg_id = result.message_id if hasattr(result, 'message_id') else result
+                                            if isinstance(sent_msg_id, int):
+                                                await db.store_sent_message(
+                                                    original_message_id, original_chat_id,
+                                                    sent_msg_id, chat_id, sent_by
+                                                )
+                                        except Exception as track_err:
+                                            logger.debug(f"Failed to track message: {track_err}")
                                 else:
                                     failed_count += 1
                                     results['failed'] += 1
@@ -2027,24 +2058,28 @@ Let's connect with Aman Directly, privately and securely!
                 f"⏳ Please wait (this will be fast!)..."
             )
             
-            # Define send function for parallel sending
+            # Define send function for parallel sending (returns MessageId for tracking)
             async def send_broadcast(chat_id):
-                await context.bot.copy_message(
+                result = await context.bot.copy_message(
                     chat_id=chat_id,
                     from_chat_id=replied_message.chat_id,
                     message_id=replied_message.message_id,
                     reply_markup=replied_message.reply_markup
                 )
-                return True
+                return result
             
-            # Use parallel sender for fast broadcasting
+            # Use parallel sender for fast broadcasting with message tracking
             start_time = asyncio.get_event_loop().time()
             success_count, failed_count, results = await self._parallel_send(
                 send_broadcast, 
                 all_recipients, 
                 status_msg, 
                 context, 
-                "Broadcasting"
+                "Broadcasting",
+                track_messages=True,
+                original_message_id=replied_message.message_id,
+                original_chat_id=replied_message.chat_id,
+                sent_by=user.id
             )
             end_time = asyncio.get_event_loop().time()
             duration = int(end_time - start_time)
