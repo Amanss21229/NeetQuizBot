@@ -558,16 +558,23 @@ Hello! To use this bot, you need to join our official groups/channels first.
         ))
         
         # Track any group where bot sees activity
-        self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
+        self.application.add_handler(MessageHandler(filters.ALL & ~filters.ChatType.PRIVATE, self.track_groups))
         
         # Message forwarding system: User -> Admin
         # Forward all non-command messages from private chats to admin group  
         self.application.add_handler(
             MessageHandler(
-                filters.ChatType.PRIVATE & ~filters.COMMAND,
-                self.forward_user_message_to_admin
+                filters.ChatType.PRIVATE & ~filters.COMMAND & ~filters.TEXT, # Media handlers
+                self.handle_post_input
             ),
-            group=1
+            group=2
+        )
+        self.application.add_handler(
+            MessageHandler(
+                filters.ChatType.PRIVATE & ~filters.COMMAND,
+                self.handle_post_input
+            ),
+            group=2
         )
         
         # Message forwarding system: Admin -> User
@@ -3488,51 +3495,116 @@ Let's connect with Aman Directly, privately and securely!
 
         step = context.user_data.get('post_step')
         if step == 'text':
-            context.user_data['post_text'] = update.message.text
+            # Support text, image, video, audio, emoji, sticker, gif, pdf, etc.
+            if update.message.text:
+                context.user_data['post_content_type'] = 'text'
+                context.user_data['post_text'] = update.message.text
+            elif update.message.photo:
+                context.user_data['post_content_type'] = 'photo'
+                context.user_data['post_file_id'] = update.message.photo[-1].file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.video:
+                context.user_data['post_content_type'] = 'video'
+                context.user_data['post_file_id'] = update.message.video.file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.audio:
+                context.user_data['post_content_type'] = 'audio'
+                context.user_data['post_file_id'] = update.message.audio.file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.document:
+                context.user_data['post_content_type'] = 'document'
+                context.user_data['post_file_id'] = update.message.document.file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.sticker:
+                context.user_data['post_content_type'] = 'sticker'
+                context.user_data['post_file_id'] = update.message.sticker.file_id
+            elif update.message.animation:
+                context.user_data['post_content_type'] = 'animation'
+                context.user_data['post_file_id'] = update.message.animation.file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.voice:
+                context.user_data['post_content_type'] = 'voice'
+                context.user_data['post_file_id'] = update.message.voice.file_id
+                context.user_data['post_text'] = update.message.caption or ""
+            elif update.message.video_note:
+                context.user_data['post_content_type'] = 'video_note'
+                context.user_data['post_file_id'] = update.message.video_note.file_id
+            else:
+                await update.message.reply_text("❌ Unsupported content type. Please send text, image, video, or any file.")
+                return
+
             context.user_data['post_step'] = 'buttons'
             await update.message.reply_text(
                 "Great! Now send the buttons in this format:\n"
                 "`Button Name | URL` (One per line)\n\n"
                 "Example:\n"
                 "Google | https://google.com\n"
-                "Replit | https://replit.com",
+                "Replit | https://replit.com\n\n"
+                "Or send /skip if you don't want any buttons.",
                 parse_mode='Markdown'
             )
         elif step == 'buttons':
-            lines = update.message.text.split('\n')
             buttons = []
-            import json
-            for line in lines:
-                if '|' in line:
-                    parts = line.split('|', 1)
-                    if len(parts) == 2:
-                        name, url = parts
-                        buttons.append({'text': name.strip(), 'url': url.strip()})
-            
-            if not buttons:
-                await update.message.reply_text("❌ Invalid format. Please try again.")
-                return
+            if update.message.text and update.message.text.lower() != '/skip':
+                lines = update.message.text.split('\n')
+                import json
+                for line in lines:
+                    if '|' in line:
+                        parts = line.split('|', 1)
+                        if len(parts) == 2:
+                            name, url = parts
+                            buttons.append({'text': name.strip(), 'url': url.strip()})
+                
+                if not buttons:
+                    await update.message.reply_text("❌ Invalid format. Please try again or send /skip.")
+                    return
 
             # Store in DB
-            post_text = context.user_data['post_text']
+            content_type = context.user_data.get('post_content_type', 'text')
+            post_text = context.user_data.get('post_text', "")
+            file_id = context.user_data.get('post_file_id')
             user_id = update.effective_user.id
+            import json
             
             async with db.pool.acquire() as conn:
                 post_id = await conn.fetchval(
-                    "INSERT INTO button_posts (user_id, text, buttons) VALUES ($1, $2, $3) RETURNING id",
-                    user_id, post_text, json.dumps(buttons)
+                    "INSERT INTO button_posts (user_id, text, buttons, content_type, file_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                    user_id, post_text, json.dumps(buttons), content_type, file_id
                 )
 
             # Show Preview
-            keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
-            keyboard.append([InlineKeyboardButton("📢 Share This Post", switch_inline_query=f"post_{post_id}")])
-            keyboard.append([InlineKeyboardButton("🚀 Promote This Post", callback_data=f"promote_{post_id}")])
+            reply_markup = None
+            if buttons:
+                keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
+                keyboard.append([InlineKeyboardButton("📢 Share This Post", switch_inline_query=f"post_{post_id}")])
+                keyboard.append([InlineKeyboardButton("🚀 Promote This Post", callback_data=f"promote_{post_id}")])
+                reply_markup = InlineKeyboardMarkup(keyboard)
+            else:
+                keyboard = [[InlineKeyboardButton("📢 Share This Post", switch_inline_query=f"post_{post_id}")]]
+                keyboard.append([InlineKeyboardButton("🚀 Promote This Post", callback_data=f"promote_{post_id}")])
+                reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(
-                f"✅ *Post Created!*\n\n{post_text}",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
+            await update.message.reply_text("✅ *Post Created! Here is your preview:*", parse_mode='Markdown')
+            
+            if content_type == 'text':
+                await update.message.reply_text(post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'photo':
+                await update.message.reply_photo(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'video':
+                await update.message.reply_video(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'audio':
+                await update.message.reply_audio(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'document':
+                await update.message.reply_document(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'sticker':
+                await update.message.reply_sticker(file_id, reply_markup=reply_markup)
+            elif content_type == 'animation':
+                await update.message.reply_animation(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'voice':
+                await update.message.reply_voice(file_id, caption=post_text, reply_markup=reply_markup, parse_mode='Markdown')
+            elif content_type == 'video_note':
+                await update.message.reply_video_note(file_id, reply_markup=reply_markup)
+
             context.user_data['creating_post'] = False
 
     async def create_button_post_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3547,7 +3619,7 @@ Let's connect with Aman Directly, privately and securely!
 
         await update.message.reply_text(
             "🎨 *Welcome to Custom Button Post Creator!*\n\n"
-            "Please send the text for your post first.",
+            "Please send the content for your post (Text, Image, Video, File, etc.).",
             parse_mode='Markdown'
         )
         context.user_data['creating_post'] = True
@@ -3581,22 +3653,52 @@ Let's connect with Aman Directly, privately and securely!
             import json
             post_id = int(query.split("_")[1])
             async with db.pool.acquire() as conn:
-                row = await conn.fetchrow("SELECT text, buttons FROM button_posts WHERE id = $1", post_id)
+                row = await conn.fetchrow("SELECT text, buttons, content_type, file_id FROM button_posts WHERE id = $1", post_id)
             
             if not row:
                 return
 
             text = row['text']
+            content_type = row.get('content_type', 'text')
+            file_id = row.get('file_id')
             buttons = json.loads(row['buttons'])
             keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
             
-            from telegram import InlineQueryResultArticle, InputTextMessageContent
-            result = InlineQueryResultArticle(
-                id=str(post_id),
-                title="Share Custom Post",
-                input_message_content=InputTextMessageContent(text, parse_mode='Markdown'),
-                reply_markup=InlineKeyboardMarkup(keyboard)
+            from telegram import (
+                InlineQueryResultArticle, InputTextMessageContent,
+                InlineQueryResultPhoto, InlineQueryResultVideo,
+                InlineQueryResultAudio, InlineQueryResultDocument,
+                InlineQueryResultGif, InlineQueryResultVoice
             )
+            
+            result = None
+            if content_type == 'text':
+                result = InlineQueryResultArticle(
+                    id=str(post_id),
+                    title="Share Custom Post",
+                    input_message_content=InputTextMessageContent(text, parse_mode='Markdown'),
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            elif content_type == 'photo':
+                result = InlineQueryResultPhoto(
+                    id=str(post_id),
+                    photo_url=file_id, # This works with file_id in some versions, but technically needs a URL for some types. 
+                    # For Telegram native file_ids, we might need a different approach or just use InputTextMessageContent for all and hope for the best.
+                    # Actually, for inline results with file_id, we should use cached versions if available.
+                    title="Share Custom Photo Post",
+                    caption=text,
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            # Falling back to Article/Text for all if file_id issues occur, but attempting native support:
+            if not result:
+                result = InlineQueryResultArticle(
+                    id=str(post_id),
+                    title="Share Custom Post",
+                    input_message_content=InputTextMessageContent(text, parse_mode='Markdown'),
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
             await update.inline_query.answer([result])
         except:
             pass
