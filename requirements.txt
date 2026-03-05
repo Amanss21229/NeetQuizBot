@@ -30,3 +30,11 @@ tornado>=6.5.0
 typing_extensions>=4.0.0
 tzlocal>=3.0
 Werkzeug>=3.1.0
+APScheduler
+asyncpg
+deep-translator
+Flask
+python-telegram-bot[all]
+pytz
+schedule
+telegram
