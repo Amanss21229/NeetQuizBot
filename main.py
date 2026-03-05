@@ -541,6 +541,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("fjoin", self.fjoin_command))
         self.application.add_handler(CommandHandler("removefjoin", self.removefjoin_command))
         self.application.add_handler(CommandHandler("forward", self.forward_command))
+        self.application.add_handler(CommandHandler("CreateButtonPost", self.create_button_post_command))
         
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
