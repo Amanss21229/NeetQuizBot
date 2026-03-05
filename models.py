@@ -231,10 +231,21 @@ class Database:
                 )
             """)
             
+            # Custom Button Posts table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS button_posts (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    text TEXT NOT NULL,
+                    buttons JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
             # Create index for faster lookups
             await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_sent_messages_original 
-                ON sent_messages(original_message_id, original_chat_id)
+                CREATE INDEX IF NOT EXISTS idx_button_posts_user 
+                ON button_posts(user_id)
             """)
 
     

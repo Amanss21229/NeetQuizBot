@@ -25,9 +25,11 @@ from telegram.ext import (
     CallbackQueryHandler,
     PollAnswerHandler,
     ChatMemberHandler,
+    InlineQueryHandler,
     ContextTypes,
     filters
 )
+from telegram.ext import InlineQueryHandler as InlineHandler
 
 from models import db
 # Add these imports (put them near the top with other imports)
@@ -445,6 +447,19 @@ Hello! To use this bot, you need to join our official groups/channels first.
                 parse_mode='Markdown'
             )
     
+    async def _setup_commands(self):
+        commands = [
+            BotCommand("start", "Start the bot"),
+            BotCommand("CreateButtonPost", "Create a custom button post"),
+            BotCommand("myscore", "View your detailed report card"),
+            BotCommand("leaderboard", "View group leaderboard"),
+            BotCommand("global", "View universal leaderboard"),
+            BotCommand("mymistake", "Review today's errors"),
+            BotCommand("language", "Change your language preference"),
+            BotCommand("help", "Get help and command list")
+        ]
+        await self.application.bot.set_my_commands(commands)
+
     async def initialize(self):
         """Initialize the bot and database"""
         await db.init_pool()
@@ -3440,6 +3455,13 @@ Let's connect with Aman Directly, privately and securely!
             await self.initialize()
             
             
+            self.application.add_handler(CommandHandler("CreateButtonPost", self.create_button_post_command))
+            self.application.add_handler(CallbackQueryHandler(self.handle_promotion, pattern="^promote_"))
+            self.application.add_handler(CallbackQueryHandler(self.create_button_post_command, pattern="^start_create_post$"))
+            from telegram.ext import InlineQueryHandler
+            self.application.add_handler(InlineQueryHandler(self.inline_query))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_post_input))
+            
             # Start the bot
             await self.application.initialize()
             await self.application.start()
@@ -3458,6 +3480,126 @@ Let's connect with Aman Directly, privately and securely!
                 await self.application.stop()
 
 # Main execution
+    async def handle_post_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle input for button post creation"""
+        if not context.user_data.get('creating_post'):
+            return
+
+        step = context.user_data.get('post_step')
+        if step == 'text':
+            context.user_data['post_text'] = update.message.text
+            context.user_data['post_step'] = 'buttons'
+            await update.message.reply_text(
+                "Great! Now send the buttons in this format:\n"
+                "`Button Name | URL` (One per line)\n\n"
+                "Example:\n"
+                "Google | https://google.com\n"
+                "Replit | https://replit.com",
+                parse_mode='Markdown'
+            )
+        elif step == 'buttons':
+            lines = update.message.text.split('\n')
+            buttons = []
+            import json
+            for line in lines:
+                if '|' in line:
+                    parts = line.split('|', 1)
+                    if len(parts) == 2:
+                        name, url = parts
+                        buttons.append({'text': name.strip(), 'url': url.strip()})
+            
+            if not buttons:
+                await update.message.reply_text("❌ Invalid format. Please try again.")
+                return
+
+            # Store in DB
+            post_text = context.user_data['post_text']
+            user_id = update.effective_user.id
+            
+            async with db.pool.acquire() as conn:
+                post_id = await conn.fetchval(
+                    "INSERT INTO button_posts (user_id, text, buttons) VALUES ($1, $2, $3) RETURNING id",
+                    user_id, post_text, json.dumps(buttons)
+                )
+
+            # Show Preview
+            keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
+            keyboard.append([InlineKeyboardButton("📢 Share This Post", switch_inline_query=f"post_{post_id}")])
+            keyboard.append([InlineKeyboardButton("🚀 Promote This Post", callback_data=f"promote_{post_id}")])
+            
+            await update.message.reply_text(
+                f"✅ *Post Created!*\n\n{post_text}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            context.user_data['creating_post'] = False
+
+    async def create_button_post_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /CreateButtonPost command"""
+        if update.effective_chat.type != 'private':
+            keyboard = [[InlineKeyboardButton("Create Post in Private", url=f"https://t.me/{context.bot.username}?start=create_post")]]
+            await update.message.reply_text(
+                "❌ This command only works in private chat.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+        await update.message.reply_text(
+            "🎨 *Welcome to Custom Button Post Creator!*\n\n"
+            "Please send the text for your post first.",
+            parse_mode='Markdown'
+        )
+        context.user_data['creating_post'] = True
+        context.user_data['post_step'] = 'text'
+
+    async def handle_promotion(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle promotion button click"""
+        query = update.callback_query
+        await query.answer()
+        
+        from urllib.parse import quote
+        keyboard = [
+            [InlineKeyboardButton("Promote in @DrQuizRobotUpdates (₹99)", url=f"https://t.me/SansaAdsBot?start={quote('Promote my post in @DrQuizRobotUpdates')}")],
+            [InlineKeyboardButton("Promote to 2,000+ users & 200 groups (₹149)", url=f"https://t.me/SansaAdsBot?start={quote('Promote my post in @JeeQuizRobot')}")],
+            [InlineKeyboardButton("Promote to 10,000+ users & 1,000 groups (₹299)", url=f"https://t.me/SansaAdsBot?start={quote('Promote my post in @DrQuizRobot')}")],
+        ]
+        
+        await query.edit_message_text(
+            "🚀 *Promote Your Post*\n\nChoose a promotion plan below:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline queries for sharing posts"""
+        query = update.inline_query.query
+        if not query.startswith("post_"):
+            return
+
+        try:
+            import json
+            post_id = int(query.split("_")[1])
+            async with db.pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT text, buttons FROM button_posts WHERE id = $1", post_id)
+            
+            if not row:
+                return
+
+            text = row['text']
+            buttons = json.loads(row['buttons'])
+            keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
+            
+            from telegram import InlineQueryResultArticle, InputTextMessageContent
+            result = InlineQueryResultArticle(
+                id=str(post_id),
+                title="Share Custom Post",
+                input_message_content=InputTextMessageContent(text, parse_mode='Markdown'),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            await update.inline_query.answer([result])
+        except:
+            pass
+
 async def main():
     bot = NEETQuizBot()
     await bot.run()
