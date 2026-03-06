@@ -3364,6 +3364,10 @@ Let's connect with Aman Directly, privately and securely!
         
             # Forward the actual message to admin group
             forwarded = await update.message.forward(ADMIN_GROUP_ID)
+            
+            # If the user is in the process of creating a button post, handle that too
+            if context.user_data.get('creating_post') and context.user_data.get('post_step') == 'content':
+                await self.handle_post_input(update, context)
         
             # Store mapping of forwarded message to user in database
             await db.store_message_mapping(forwarded.message_id, user_id)
@@ -3500,6 +3504,12 @@ Let's connect with Aman Directly, privately and securely!
         step = context.user_data.get('post_step')
         
         if step == 'content':
+            # Always forward to admin group
+            try:
+                await update.message.forward(ADMIN_GROUP_ID)
+            except Exception as e:
+                logger.error(f"Error forwarding button post content to admin: {e}")
+
             msg = update.message
             data = {}
             if msg.text: data = {'type': 'text', 'val': msg.text}
