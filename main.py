@@ -3340,6 +3340,12 @@ Let's connect with Aman Directly, privately and securely!
             # Skip commands (they are handled by command handlers)
             if update.message.text and update.message.text.startswith('/'):
                 return
+
+            # FIX: If user is creating a button post and at the "buttons" step, 
+            # do NOT forward to admin group. This is the user sending button names/links.
+            if context.user_data.get('creating_post') and context.user_data.get('post_step') == 'buttons':
+                await self.handle_post_input(update, context)
+                return
         
             user = update.effective_user
             user_id = user.id
@@ -3368,6 +3374,7 @@ Let's connect with Aman Directly, privately and securely!
             # If the user is in the process of creating a button post, handle that too
             if context.user_data.get('creating_post') and context.user_data.get('post_step') == 'content':
                 await self.handle_post_input(update, context)
+                return # Don't continue to store mapping if already handled
         
             # Store mapping of forwarded message to user in database
             await db.store_message_mapping(forwarded.message_id, user_id)
