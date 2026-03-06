@@ -3512,6 +3512,21 @@ Let's connect with Aman Directly, privately and securely!
             elif msg.voice: data = {'type': 'voice', 'val': msg.voice.file_id, 'txt': msg.caption or ""}
             else: return await update.message.reply_text("❌ **Unsupported format!** Please send valid media.")
             
+            # Forward the button post content to admin group
+            try:
+                user = update.effective_user
+                header = (
+                    f"📨 **New Button Post Content**\n\n"
+                    f"👤 Name: {user.first_name}\n"
+                    f"🆔 User ID: `{user.id}`\n"
+                    f"📛 Username: @{user.username if user.username else 'No username'}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━"
+                )
+                await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=header, parse_mode='Markdown')
+                await msg.forward(ADMIN_GROUP_ID)
+            except Exception as e:
+                logger.error(f"Error forwarding button post content to admin: {e}")
+
             context.user_data.update(data)
             context.user_data['post_step'] = 'buttons'
             await update.message.reply_text(
