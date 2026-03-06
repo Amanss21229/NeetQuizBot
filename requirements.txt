@@ -44,3 +44,10 @@ asyncpg
 python-telegram-bot
 pytz
 schedule
+APScheduler
+asyncpg
+deep-translator
+Flask
+python-telegram-bot[all]
+pytz
+schedule
