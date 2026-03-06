@@ -109,6 +109,7 @@ class NEETQuizBot:
         await db.init()
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("CreateButtonPost", self.create_button_post_command))
+        self.application.add_handler(CommandHandler("mypost", self.my_posts_command))
         self.application.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, self.handle_post_input))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         self.application.add_handler(InlineQueryHandler(self.inline_query))
@@ -119,9 +120,30 @@ class NEETQuizBot:
         await update.message.reply_text(
             f"👋 **Welcome {user.first_name}!**\n\n"
             "I am the **NEET Quiz Premium Bot**. I can help you create professional posts with custom buttons and manage quizzes.\n\n"
-            "🚀 **Ready to create?** Use /CreateButtonPost",
+            "🚀 **Ready to create?** Use /CreateButtonPost\n"
+            "📂 **Manage your posts?** Use /mypost",
             parse_mode='Markdown'
         )
+
+    async def my_posts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type != 'private':
+            await update.message.reply_text("❌ Please use this command in private chat.")
+            return
+        
+        async with db.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id, text, content_type FROM button_posts WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10", update.effective_user.id)
+        
+        if not rows:
+            await update.message.reply_text("📭 You haven't created any posts yet. Use /CreateButtonPost to start!")
+            return
+        
+        text = "📂 **YOUR RECENT POSTS**\n\nSelect a post to manage:"
+        keyboard = []
+        for r in rows:
+            preview = (r['text'][:30] + "...") if r['text'] and len(r['text']) > 30 else (r['text'] or f"Post #{r['id']}")
+            keyboard.append([InlineKeyboardButton(f"📝 {preview}", callback_data=f"manage_{r['id']}")])
+        
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
     async def create_button_post_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type != 'private':
@@ -160,11 +182,11 @@ class NEETQuizBot:
             context.user_data['post_step'] = 'buttons'
             await update.message.reply_text(
                 "✨ **Step 2: Add Action Buttons**\n\n"
-                "Send your buttons in this format:\n"
-                "`Button Name | URL` (One per line)\n\n"
+                "Format: `Button Name | URL | Color` (One per line)\n"
+                "Colors: `blue`, `red`, `yellow`, `green` (Optional)\n\n"
                 "**Example:**\n"
-                "Join Channel | https://t.me/example\n"
-                "Support | https://google.com\n\n"
+                "Join | https://t.me/example | blue\n"
+                "Support | https://google.com | red\n\n"
                 "⏩ Send /skip if you don't want any buttons.",
                 parse_mode='Markdown'
             )
@@ -174,9 +196,15 @@ class NEETQuizBot:
             if update.message.text and update.message.text.lower() != '/skip':
                 for line in update.message.text.split('\n'):
                     if '|' in line:
-                        p = line.split('|', 1)
-                        if len(p) == 2:
-                            buttons.append({'text': p[0].strip(), 'url': p[1].strip()})
+                        p = [x.strip() for x in line.split('|')]
+                        if len(p) >= 2:
+                            btn = {'text': p[0], 'url': p[1]}
+                            if len(p) >= 3:
+                                color_map = {'blue': '🔵', 'red': '🔴', 'yellow': '🟡', 'green': '🟢'}
+                                color_key = p[2].lower()
+                                if color_key in color_map:
+                                    btn['text'] = f"{color_map[color_key]} {btn['text']}"
+                            buttons.append(btn)
             
             async with db.pool.acquire() as conn:
                 pid = await conn.fetchval(
@@ -195,6 +223,8 @@ class NEETQuizBot:
         async with db.pool.acquire() as conn:
             r = await conn.fetchrow("SELECT * FROM button_posts WHERE id = $1", pid)
         
+        if not r: return
+        
         kb = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in json.loads(r['buttons'])]
         kb.append([InlineKeyboardButton("📤 Share Post", switch_inline_query=f"post_{pid}")])
         kb.append([InlineKeyboardButton("🚀 Promote Post", callback_data=f"promote_{pid}")])
@@ -203,7 +233,7 @@ class NEETQuizBot:
         t, v, ct = r['text'], r['file_id'], r['content_type']
         cid = update.effective_chat.id
         
-        await update.message.reply_text("✅ **Post Created Successfully!**\nPreviewing your premium content below:", parse_mode='Markdown')
+        await update.message.reply_text("✅ **Post Preview (ID: {})**".format(pid), parse_mode='Markdown')
         
         try:
             if ct == 'text': await update.message.reply_text(t, reply_markup=rm, parse_mode='Markdown')
@@ -224,12 +254,13 @@ class NEETQuizBot:
             await q.answer()
         except: pass
         
-        if q.data.startswith("promote_"):
-            pid = q.data.split('_')[1]
+        data = q.data
+        if data.startswith("promote_"):
+            pid = data.split('_')[1]
             kb = [[InlineKeyboardButton("💎 Standard (₹99)", url=f"https://t.me/SansaAdsBot?start={quote(f'Standard Post {pid}')}")],
                   [InlineKeyboardButton("🔥 Mega (₹149)", url=f"https://t.me/SansaAdsBot?start={quote(f'Mega Post {pid}')}")],
                   [InlineKeyboardButton("👑 Ultimate (₹299)", url=f"https://t.me/SansaAdsBot?start={quote(f'Ultimate Post {pid}')}")],
-                  [InlineKeyboardButton("🔙 Back", callback_data=f"preview_{pid}")]]
+                  [InlineKeyboardButton("🔙 Back", callback_data=f"manage_{pid}")]]
             await q.edit_message_text(
                 "🚀 **PREMIUM BOOST OPTIONS**\n\n"
                 "Get your post noticed by 50,000+ medical students instantly!\n\n"
@@ -237,8 +268,31 @@ class NEETQuizBot:
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode='Markdown'
             )
-        elif q.data.startswith("preview_"):
-            pid = int(q.data.split('_')[1])
+        elif data.startswith("manage_"):
+            pid = int(data.split('_')[1])
+            kb = [
+                [InlineKeyboardButton("👁 Preview", callback_data=f"preview_{pid}")],
+                [InlineKeyboardButton("🚀 Promote", callback_data=f"promote_{pid}")],
+                [InlineKeyboardButton("🗑 Delete", callback_data=f"delete_{pid}")],
+                [InlineKeyboardButton("🔙 Back to List", callback_data="list_posts")]
+            ]
+            await q.edit_message_text(f"🛠 **Post Management (ID: {pid})**\n\nChoose an action:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        elif data == "list_posts":
+            async with db.pool.acquire() as conn:
+                rows = await conn.fetch("SELECT id, text FROM button_posts WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10", q.from_user.id)
+            if not rows:
+                await q.edit_message_text("📭 No posts found.")
+                return
+            kb = [[InlineKeyboardButton(f"📝 {r['text'][:30]}...", callback_data=f"manage_{r['id']}")] for r in rows]
+            await q.edit_message_text("📂 **YOUR RECENT POSTS**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        elif data.startswith("delete_"):
+            pid = int(data.split('_')[1])
+            async with db.pool.acquire() as conn:
+                await conn.execute("DELETE FROM button_posts WHERE id = $1 AND user_id = $2", pid, q.from_user.id)
+            await q.answer("✅ Post deleted successfully!", show_alert=True)
+            await q.edit_message_text("✅ Post has been deleted.")
+        elif data.startswith("preview_"):
+            pid = int(data.split('_')[1])
             await q.message.delete()
             await self.show_post_preview_internal(update, pid)
 
