@@ -35,6 +35,7 @@ from telegram import (
 )
 from telegram.helpers import escape_markdown
 from telegram.ext import (
+    Application, 
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
