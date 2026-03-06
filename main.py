@@ -185,8 +185,8 @@ class NEETQuizBot:
                 "Format: `Button Name | URL | Color` (One per line)\n"
                 "Colors: `blue`, `red`, `yellow`, `green` (Optional)\n\n"
                 "**Example:**\n"
-                "Join | https://t.me/example | blue\n"
-                "Support | https://google.com | red\n\n"
+                "Join | https://t.me/FounderOfSansa | blue\n"
+                "Support | https://youtube.com/@Sansalearn | red\n\n"
                 "⏩ Send /skip if you don't want any buttons.",
                 parse_mode='Markdown'
             )
@@ -200,10 +200,15 @@ class NEETQuizBot:
                         if len(p) >= 2:
                             btn = {'text': p[0], 'url': p[1]}
                             if len(p) >= 3:
-                                color_map = {'blue': '🔵', 'red': '🔴', 'yellow': '🟡', 'green': '🟢'}
+                                color_map = {
+                                    'blue': '🟦', 
+                                    'red': '🟥', 
+                                    'yellow': '🟨', 
+                                    'green': '🟩'
+                                }
                                 color_key = p[2].lower()
                                 if color_key in color_map:
-                                    btn['text'] = f"{color_map[color_key]} {btn['text']}"
+                                    btn['text'] = f"{color_map[color_key]} {btn['text']} {color_map[color_key]}"
                             buttons.append(btn)
             
             async with db.pool.acquire() as conn:
@@ -216,16 +221,18 @@ class NEETQuizBot:
                     context.user_data.get('val') if context.user_data['type'] != 'text' else None
                 )
             
-            await self.show_post_preview_internal(update, pid)
+            # Use self.application.bot.send_message or similar since context.bot might be preferred
+            await self.show_post_preview_internal(update, context, pid)
             context.user_data.clear()
 
-    async def show_post_preview_internal(self, update: Update, pid):
+    async def show_post_preview_internal(self, update: Update, context: ContextTypes.DEFAULT_TYPE, pid: int):
         async with db.pool.acquire() as conn:
             r = await conn.fetchrow("SELECT * FROM button_posts WHERE id = $1", pid)
         
         if not r: return
         
-        kb = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in json.loads(r['buttons'])]
+        buttons_list = json.loads(r['buttons'])
+        kb = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons_list]
         kb.append([InlineKeyboardButton("📤 Share Post", switch_inline_query=f"post_{pid}")])
         kb.append([InlineKeyboardButton("🚀 Promote Post", callback_data=f"promote_{pid}")])
         rm = InlineKeyboardMarkup(kb)
@@ -233,20 +240,24 @@ class NEETQuizBot:
         t, v, ct = r['text'], r['file_id'], r['content_type']
         cid = update.effective_chat.id
         
-        await update.message.reply_text("✅ **Post Preview (ID: {})**".format(pid), parse_mode='Markdown')
+        # Determine if we have a message to reply to or a callback to edit
+        # For preview via /mypost (callback), we want to send a fresh message after deleting the management one
+        # The calling method handles the deletion/answering
         
         try:
-            if ct == 'text': await update.message.reply_text(t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'photo': await update.message.reply_photo(v, caption=t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'video': await update.message.reply_video(v, caption=t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'document': await update.message.reply_document(v, caption=t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'sticker': await update.message.reply_sticker(v, reply_markup=rm)
-            elif ct == 'animation': await update.message.reply_animation(v, caption=t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'audio': await update.message.reply_audio(v, caption=t, reply_markup=rm, parse_mode='Markdown')
-            elif ct == 'voice': await update.message.reply_voice(v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            await context.bot.send_message(cid, f"✅ **Post Preview (ID: {pid})**", parse_mode='Markdown')
+            
+            if ct == 'text': await context.bot.send_message(cid, t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'photo': await context.bot.send_photo(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'video': await context.bot.send_video(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'document': await context.bot.send_document(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'sticker': await context.bot.send_sticker(cid, v, reply_markup=rm)
+            elif ct == 'animation': await context.bot.send_animation(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'audio': await context.bot.send_audio(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
+            elif ct == 'voice': await context.bot.send_voice(cid, v, caption=t, reply_markup=rm, parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Preview error: {e}")
-            await update.message.reply_text(f"✅ Saved! (ID: {pid}). Preview error, but sharing will work.", reply_markup=rm)
+            await context.bot.send_message(cid, f"✅ Saved! (ID: {pid}). Preview error, but sharing will work.", reply_markup=rm)
 
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
@@ -293,8 +304,11 @@ class NEETQuizBot:
             await q.edit_message_text("✅ Post has been deleted.")
         elif data.startswith("preview_"):
             pid = int(data.split('_')[1])
-            await q.message.delete()
-            await self.show_post_preview_internal(update, pid)
+            try:
+                await q.message.delete()
+            except:
+                pass
+            await self.show_post_preview_internal(update, context, pid)
 
     async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.inline_query.query
