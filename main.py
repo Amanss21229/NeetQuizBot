@@ -516,7 +516,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("refresh", self.refresh_command))
         self.application.add_handler(CommandHandler("createbuttonpost", self.create_button_post_command))
-        self.application.add_handler(CommandHandler("mypost", self.my_post_command))        
+        self.application.add_handler(CommandHandler("mypost", self.my_posts_command))        
         self.application.add_handler(CommandHandler("donate", self.donate_command))
         self.application.add_handler(CommandHandler("developer", self.developer_command))
         self.application.add_handler(CommandHandler("myscore", self.myscore_command))
