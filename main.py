@@ -943,7 +943,7 @@ Let's ace NEET together! 🚀
                                     quiz_options = options
                         
                         # Add branding mention at the end of question
-                        quiz_question = quiz_question + "\n\n@DrQuizRobot"
+                        quiz_question = quiz_question + "\n\n【~@DrQuizRobot】"
                         
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
@@ -1724,7 +1724,16 @@ Let's connect with Aman Directly, privately and securely!
             if len(question) > 200:
                 question = question[:197] + "..."
             
-            options = quiz['options'] if isinstance(quiz['options'], list) else []
+            # Parse options - handle both list and JSON string formats
+            options = quiz['options']
+            if isinstance(options, str):
+                try:
+                    options = json.loads(options)
+                except:
+                    options = []
+            elif not isinstance(options, list):
+                options = []
+            
             correct_option = quiz['correct_option']
             selected_option = quiz['selected_option']
             
