@@ -59,3 +59,11 @@ Flask
 python-telegram-bot[all]
 pytz
 schedule
+aiolimiter
+APScheduler
+asyncpg
+deep-translator
+Flask
+python-telegram-bot[all]
+pytz
+schedule
