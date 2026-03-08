@@ -942,6 +942,9 @@ Let's ace NEET together! 🚀
                                     quiz_question = poll.question
                                     quiz_options = options
                         
+                        # Add branding mention at the end of question
+                        quiz_question = quiz_question + "\n\n@DrQuizRobot"
+                        
                         # Send new poll (not forward) with is_anonymous=False
                         sent_message = await context.bot.send_poll(
                             chat_id=chat['id'],
