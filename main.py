@@ -3504,7 +3504,7 @@ Let's connect with Aman Directly, privately and securely!
 
     async def create_button_post_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type != 'private':
-            keyboard = [[InlineKeyboardButton("🛠 Create Post Now", url=f"https://t.me/{context.bot.username}?start=creatbuttonpost")]]
+            keyboard = [[InlineKeyboardButton("🛠 Create Post Now", url=f"https://t.me/{context.bot.username}?start=createbuttonpost")]]
             await update.message.reply_text("💡 **Private Access Required**\nPlease use my private chat for post creation.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
             return
         
