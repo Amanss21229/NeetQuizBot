@@ -126,6 +126,63 @@ class Database:
                 END $$;
             """)
 
+            # Migration: Add clone_bot_id to groups
+            await conn.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='groups' AND column_name='clone_bot_id'
+                    ) THEN
+                        ALTER TABLE groups ADD COLUMN clone_bot_id BIGINT DEFAULT NULL;
+                    END IF;
+                END $$;
+            """)
+
+            # Migration: Add clone_bot_id to users
+            await conn.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='users' AND column_name='clone_bot_id'
+                    ) THEN
+                        ALTER TABLE users ADD COLUMN clone_bot_id BIGINT DEFAULT NULL;
+                    END IF;
+                END $$;
+            """)
+
+            # Clone bots table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS clone_bots (
+                    id SERIAL PRIMARY KEY,
+                    bot_token TEXT UNIQUE NOT NULL,
+                    bot_id BIGINT UNIQUE NOT NULL,
+                    bot_name TEXT,
+                    bot_username TEXT,
+                    owner_id BIGINT NOT NULL,
+                    owner_username TEXT,
+                    owner_name TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    is_paused BOOLEAN DEFAULT FALSE,
+                    pause_reason TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Poll mappings table (for clone bots to look up quiz data)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS poll_mappings (
+                    poll_id TEXT PRIMARY KEY,
+                    quiz_id INTEGER,
+                    group_id BIGINT,
+                    message_id BIGINT,
+                    clone_bot_id BIGINT,
+                    correct_option INTEGER,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
             # Admins table (create before inserting data)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
@@ -262,20 +319,21 @@ class Database:
             """)
 
     
-    async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None):
+    async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update user in database"""
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO users (id, username, first_name, last_name, updated_at)
-                VALUES ($1, $2, $3, $4, NOW())
+                INSERT INTO users (id, username, first_name, last_name, clone_bot_id, updated_at)
+                VALUES ($1, $2, $3, $4, $5, NOW())
                 ON CONFLICT (id) DO UPDATE SET
                     username = $2,
                     first_name = $3,
                     last_name = $4,
+                    clone_bot_id = COALESCE(users.clone_bot_id, EXCLUDED.clone_bot_id),
                     updated_at = NOW()
-            """, user_id, username, first_name, last_name)
+            """, user_id, username, first_name, last_name, clone_bot_id)
     
     async def get_user(self, user_id: int) -> Optional[Dict]:
         """Get user data by user ID"""
@@ -291,19 +349,20 @@ class Database:
             """, user_id)
             return dict(row) if row else None
     
-    async def add_group(self, group_id: int, title: str, group_type: str):
+    async def add_group(self, group_id: int, title: str, group_type: str, clone_bot_id: Optional[int] = None):
         """Add or update group in database"""
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO groups (id, title, type, updated_at)
-                VALUES ($1, $2, $3, NOW())
+                INSERT INTO groups (id, title, type, clone_bot_id, updated_at)
+                VALUES ($1, $2, $3, $4, NOW())
                 ON CONFLICT (id) DO UPDATE SET
                     title = $2,
                     type = $3,
+                    clone_bot_id = COALESCE(groups.clone_bot_id, EXCLUDED.clone_bot_id),
                     updated_at = NOW()
-            """, group_id, title, group_type)
+            """, group_id, title, group_type, clone_bot_id)
     
     async def add_group_member(self, user_id: int, group_id: int):
         """Add user to group"""
@@ -756,6 +815,152 @@ class Database:
             self._set_cache(cache_key, language, self._cache_ttl['group_language'])
             return language
     
+    async def add_clone_bot(self, bot_token: str, bot_id: int, bot_name: str, bot_username: str,
+                            owner_id: int, owner_username: Optional[str], owner_name: Optional[str]) -> bool:
+        """Register a new clone bot. Returns True if added, False if already exists."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            existing = await conn.fetchval("SELECT bot_id FROM clone_bots WHERE bot_id = $1 OR owner_id = $2", bot_id, owner_id)
+            if existing:
+                return False
+            await conn.execute("""
+                INSERT INTO clone_bots (bot_token, bot_id, bot_name, bot_username, owner_id, owner_username, owner_name)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """, bot_token, bot_id, bot_name, bot_username, owner_id, owner_username, owner_name)
+            return True
+
+    async def get_all_active_clone_bots(self) -> List[Dict]:
+        """Get all active (not paused) clone bots"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM clone_bots WHERE is_active = TRUE AND is_paused = FALSE ORDER BY created_at
+            """)
+            return [dict(r) for r in rows]
+
+    async def get_all_clone_bots(self) -> List[Dict]:
+        """Get all clone bots including paused ones"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM clone_bots ORDER BY created_at")
+            return [dict(r) for r in rows]
+
+    async def get_clone_bot(self, bot_id: int) -> Optional[Dict]:
+        """Get clone bot by its Telegram bot_id"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM clone_bots WHERE bot_id = $1", bot_id)
+            return dict(row) if row else None
+
+    async def get_clone_bot_by_owner(self, owner_id: int) -> Optional[Dict]:
+        """Get clone bot by owner's user_id"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM clone_bots WHERE owner_id = $1", owner_id)
+            return dict(row) if row else None
+
+    async def pause_clone_bot(self, bot_id: int, reason: str):
+        """Pause a clone bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE clone_bots SET is_paused = TRUE, pause_reason = $2 WHERE bot_id = $1
+            """, bot_id, reason)
+
+    async def resume_clone_bot(self, bot_id: int):
+        """Resume a paused clone bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE clone_bots SET is_paused = FALSE, pause_reason = NULL WHERE bot_id = $1
+            """, bot_id)
+
+    async def get_clone_groups(self, clone_bot_id: int) -> List[Dict]:
+        """Get all groups registered under a clone bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM groups WHERE clone_bot_id = $1 AND is_active = TRUE
+            """, clone_bot_id)
+            return [dict(r) for r in rows]
+
+    async def get_clone_users(self, clone_bot_id: int) -> List[Dict]:
+        """Get all users registered under a clone bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM users WHERE clone_bot_id = $1
+            """, clone_bot_id)
+            return [dict(r) for r in rows]
+
+    async def get_clone_bot_stats(self, clone_bot_id: int) -> Dict:
+        """Get stats for a clone bot"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            users_count = await conn.fetchval("SELECT COUNT(*) FROM users WHERE clone_bot_id = $1", clone_bot_id)
+            groups_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM groups WHERE clone_bot_id = $1 AND is_active = TRUE AND type IN ('group','supergroup')", clone_bot_id)
+            channels_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM groups WHERE clone_bot_id = $1 AND is_active = TRUE AND type = 'channel'", clone_bot_id)
+            answers_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM user_quiz_scores uqs
+                JOIN groups g ON uqs.group_id = g.id
+                WHERE g.clone_bot_id = $1
+            """, clone_bot_id)
+            return {
+                'users': users_count or 0,
+                'groups': groups_count or 0,
+                'channels': channels_count or 0,
+                'total_answers': answers_count or 0
+            }
+
+    async def get_clone_leaderboard(self, clone_bot_id: int, limit: int = 10) -> List[Dict]:
+        """Get leaderboard for a clone bot's audience"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT u.id, u.first_name, u.username, SUM(uqs.points) as total_score
+                FROM user_quiz_scores uqs
+                JOIN users u ON uqs.user_id = u.id
+                JOIN groups g ON uqs.group_id = g.id
+                WHERE g.clone_bot_id = $1
+                GROUP BY u.id, u.first_name, u.username
+                ORDER BY total_score DESC
+                LIMIT $2
+            """, clone_bot_id, limit)
+            return [dict(r) for r in rows]
+
+    async def add_poll_mapping(self, poll_id: str, quiz_id: int, group_id: int,
+                                message_id: int, clone_bot_id: int, correct_option: int):
+        """Store poll ID → quiz mapping for clone bots"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO poll_mappings (poll_id, quiz_id, group_id, message_id, clone_bot_id, correct_option)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (poll_id) DO NOTHING
+            """, poll_id, quiz_id, group_id, message_id, clone_bot_id, correct_option)
+
+    async def get_poll_mapping(self, poll_id: str) -> Optional[Dict]:
+        """Get poll mapping by poll_id"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM poll_mappings WHERE poll_id = $1", poll_id)
+            return dict(row) if row else None
+
     async def add_force_join_group(self, chat_id: int, chat_username: Optional[str] = None, 
                                    chat_title: Optional[str] = None, chat_type: Optional[str] = None,
                                    invite_link: Optional[str] = None, added_by: Optional[int] = None) -> bool:
