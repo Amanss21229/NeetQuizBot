@@ -573,17 +573,18 @@ Hello! To use this bot, you need to join our official groups/channels first.
             ChatMemberHandler.MY_CHAT_MEMBER
         ))
         
-        # Track any group where bot sees activity
-        self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
-        
-        # Clone token input handler (intercepts before forward_user_message_to_admin)
+        # Clone token input handler — must run FIRST (group=-1) so it intercepts
+        # the token message before track_groups or forward_user_message_to_admin see it.
         self.application.add_handler(
             MessageHandler(
                 filters.ChatType.PRIVATE & ~filters.COMMAND,
                 self.handle_clone_token_input
             ),
-            group=0
+            group=-1
         )
+
+        # Track any group where bot sees activity
+        self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
 
         # Message forwarding system: User -> Admin
         # Forward all non-command messages from private chats to admin group  
