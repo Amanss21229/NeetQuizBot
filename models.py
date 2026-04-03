@@ -183,6 +183,14 @@ class Database:
                 )
             """)
 
+            # Clone pending setup table (persists across bot restarts)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS clone_pending (
+                    user_id BIGINT PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
             # Admins table (create before inserting data)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
@@ -829,6 +837,31 @@ class Database:
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             """, bot_token, bot_id, bot_name, bot_username, owner_id, owner_username, owner_name)
             return True
+
+    async def set_clone_pending(self, user_id: int):
+        """Mark user as pending clone setup"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO clone_pending (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+
+    async def is_clone_pending(self, user_id: int) -> bool:
+        """Check if user is in clone setup pending state"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval("SELECT user_id FROM clone_pending WHERE user_id = $1", user_id)
+            return row is not None
+
+    async def clear_clone_pending(self, user_id: int):
+        """Remove user from clone pending state"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM clone_pending WHERE user_id = $1", user_id)
 
     async def get_all_active_clone_bots(self) -> List[Dict]:
         """Get all active (not paused) clone bots"""

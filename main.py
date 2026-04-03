@@ -272,7 +272,7 @@ class NEETQuizBot:
         self.groups_cache = {}  # In-memory cache: {group_id: {"title": str, "type": str}} - works without DB
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
         self.broadcast_semaphore = asyncio.Semaphore(25)  # Limit concurrent sends to 25
-        self._clone_setup_pending = {}  # {user_id: 'awaiting_token'} for /clone flow
+        # clone_setup_pending is now stored in DB (clone_pending table) — survives restarts
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -3435,13 +3435,17 @@ Let's connect with Aman Directly, privately and securely!
             if update.message.text and update.message.text.startswith('/'):
                 return
 
+            user = update.effective_user
+
+            # Skip forwarding if user is in clone bot setup — their token must never be exposed to admin group
+            if await db.is_clone_pending(user.id):
+                return
+
             # FIX: If user is creating a button post and at the "buttons" step, 
             # do NOT forward to admin group. This is the user sending button names/links.
             if context.user_data.get('creating_post') and context.user_data.get('post_step') == 'buttons':
                 await self.handle_post_input(update, context)
                 return
-        
-            user = update.effective_user
             user_id = user.id
             user_name = user.first_name
             username = f"@{user.username}" if user.username else "No username"
@@ -3842,7 +3846,7 @@ Let's connect with Aman Directly, privately and securely!
             )
             return
 
-        self._clone_setup_pending[user.id] = 'awaiting_token'
+        await db.set_clone_pending(user.id)
         await update.message.reply_text(
             "🤖 **Create Your Own Quiz Bot**\n\n"
             "You can create your own NEET Quiz Bot without any coding!\n\n"
@@ -3857,9 +3861,9 @@ Let's connect with Aman Directly, privately and securely!
         )
 
     async def handle_clone_token_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle token input during /clone setup — runs in group=0 to intercept before admin forward"""
+        """Handle token input during /clone setup — runs in group=-1 to intercept before all other handlers"""
         user = update.effective_user
-        if user.id not in self._clone_setup_pending:
+        if not await db.is_clone_pending(user.id):
             return
 
         message = update.message
@@ -3869,7 +3873,7 @@ Let's connect with Aman Directly, privately and securely!
         token_text = message.text.strip()
 
         if token_text.lower() == '/cancel':
-            del self._clone_setup_pending[user.id]
+            await db.clear_clone_pending(user.id)
             await message.reply_text("❌ Clone bot setup cancelled.")
             if ApplicationHandlerStop:
                 raise ApplicationHandlerStop
@@ -3927,12 +3931,12 @@ Let's connect with Aman Directly, privately and securely!
 
         if not added:
             await message.reply_text("❌ You already have a clone bot registered.")
-            del self._clone_setup_pending[user.id]
+            await db.clear_clone_pending(user.id)
             if ApplicationHandlerStop:
                 raise ApplicationHandlerStop
             return
 
-        del self._clone_setup_pending[user.id]
+        await db.clear_clone_pending(user.id)
 
         # Start the clone bot
         await clone_manager.start_clone(
