@@ -2963,7 +2963,10 @@ Let's connect with Aman Directly, privately and securely!
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         # Get current language preference
-        current_lang = await db.get_group_language(chat.id) if chat.type in ['group', 'supergroup'] else 'english'
+        if chat.type in ['group', 'supergroup']:
+            current_lang = await db.get_group_language(chat.id)
+        else:
+            current_lang = await db.get_user_language(user.id)
         lang_display = "English" if current_lang == 'english' else "हिंदी (Hindi)"
         
         await update.message.reply_text(
@@ -3163,12 +3166,14 @@ Let's connect with Aman Directly, privately and securely!
                         await query.answer("❌ Only admins can change language!", show_alert=True)
                         return
                 
-                # Set language preference
-                await db.set_group_language(chat_id, language)
-                
-                # Update groups cache with language
-                if chat_id in self.groups_cache:
-                    self.groups_cache[chat_id]['language'] = language
+                # Set language preference (use user table for private chats)
+                if chat.type == 'private':
+                    await db.set_user_language(chat_id, language)
+                else:
+                    await db.set_group_language(chat_id, language)
+                    # Update groups cache with language
+                    if chat_id in self.groups_cache:
+                        self.groups_cache[chat_id]['language'] = language
                 
                 lang_display = "English 🇬🇧" if language == 'english' else "हिंदी 🇮🇳"
                 

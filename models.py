@@ -113,6 +113,19 @@ class Database:
                 END $$;
             """)
 
+            # Migration: Add language_preference column to users table if it doesn't exist
+            await conn.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='users' AND column_name='language_preference'
+                    ) THEN
+                        ALTER TABLE users ADD COLUMN language_preference TEXT DEFAULT 'english';
+                    END IF;
+                END $$;
+            """)
+
             # Admins table (create before inserting data)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS admins (
@@ -711,6 +724,34 @@ class Database:
             result = await conn.fetchval("""
                 SELECT language_preference FROM groups WHERE id = $1
             """, group_id)
+            language = result if result is not None else 'english'
+            self._set_cache(cache_key, language, self._cache_ttl['group_language'])
+            return language
+
+    async def set_user_language(self, user_id: int, language: str):
+        """Set language preference for a user (private chat)"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE users SET language_preference = $2, updated_at = NOW()
+                WHERE id = $1
+            """, user_id, language.lower())
+        self._invalidate_cache(f'user_language_{user_id}')
+
+    async def get_user_language(self, user_id: int) -> str:
+        """Get language preference for a user (private chat), cached"""
+        cache_key = f'user_language_{user_id}'
+        cached = self._get_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval("""
+                SELECT language_preference FROM users WHERE id = $1
+            """, user_id)
             language = result if result is not None else 'english'
             self._set_cache(cache_key, language, self._cache_ttl['group_language'])
             return language
