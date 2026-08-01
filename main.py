@@ -3204,67 +3204,45 @@ Let's connect with Aman Directly, privately and securely!
             logger.error(f"Error in removefjoin command: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}", parse_mode='Markdown')
     
-    async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle inline keyboard callbacks"""
-        query = update.callback_query
-        await query.answer()
-        
-        user = query.from_user
-        
-        # Check force join ONLY for private chat callbacks (not for groups, not for admins)
-        if query.message and query.message.chat.type == 'private':
-            if not await db.is_admin(user.id):
-                is_joined, missing_groups = await self.check_force_join(user.id, context)
-                if not is_joined:
-                    await query.answer("❌ Please join all required groups first!", show_alert=True)
-                    await self.send_force_join_message(update, context, user.id, missing_groups)
-                    return
-        
-        # Handle language selection callbacks
-        if query.data.startswith("lang_"):
-            parts = query.data.split("_")
-            if len(parts) == 3:
-                language = parts[1]  # english or hindi
-                chat_id = int(parts[2])
-                
-                # Verify user has permission (for groups)
-                chat = await context.bot.get_chat(chat_id)
-                if chat.type in ['group', 'supergroup']:
-                    user = query.from_user
-                    is_bot_admin = await db.is_admin(user.id)
-                    
-                    try:
-                        member = await context.bot.get_chat_member(chat_id, user.id)
-                        is_group_admin = member.status in ['creator', 'administrator']
-                    except:
-                        is_group_admin = False
-                    
-                    if not is_bot_admin and not is_group_admin:
-                        await query.answer("❌ Only admins can change language!", show_alert=True)
-                        return
-                
-                # Set language preference (use user table for private chats)
-                if chat.type == 'private':
-                    await db.set_user_language(chat_id, language)
-                else:
-                    await db.set_group_language(chat_id, language)
-                    # Update groups cache with language
-                    if chat_id in self.groups_cache:
-                        self.groups_cache[chat_id]['language'] = language
-                
-                lang_display = "English 🇬🇧" if language == 'english' else "हिंदी 🇮🇳"
-                
-                await query.edit_message_text(
-                    f"✅ **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗**\n\n"
-                    f"🌐 Quiz Language: **{lang_display}**\n\n"
-                    f"{'📝 Quizzes will now appear in English' if language == 'english' else '📝 अब प्रश्न हिंदी में आएंगे'}\n\n"
-                    f"📊 Leaderboard remains same for all languages!",
-                    parse_mode='Markdown'
-                )
-                logger.info(f"Language set to {language} for chat {chat_id}")
+    async def _handle_lang_callback(self, query, context):
+        """Handle lang_* callback (language selection buttons)"""
+        parts = query.data.split("_")
+        if len(parts) != 3:
+            return
+        language = parts[1]   # 'english' or 'hindi'
+        chat_id = int(parts[2])
+
+        # Verify permission for groups
+        chat = await context.bot.get_chat(chat_id)
+        if chat.type in ['group', 'supergroup']:
+            user = query.from_user
+            is_bot_admin = await db.is_admin(user.id)
+            try:
+                member = await context.bot.get_chat_member(chat_id, user.id)
+                is_group_admin = member.status in ['creator', 'administrator']
+            except:
+                is_group_admin = False
+            if not is_bot_admin and not is_group_admin:
+                await query.answer("❌ Only admins can change language!", show_alert=True)
+                return
+
+        # Persist language preference
+        if chat.type == 'private':
+            await db.set_user_language(chat_id, language)
         else:
-            # Handle any other callback queries if needed
-            logger.info(f"Callback query: {query.data}")
+            await db.set_group_language(chat_id, language)
+            if chat_id in self.groups_cache:
+                self.groups_cache[chat_id]['language'] = language
+
+        lang_display = "English 🇬🇧" if language == 'english' else "हिंदी 🇮🇳"
+        await query.edit_message_text(
+            f"✅ **𝗟𝗔𝗡𝗚𝗨𝗔𝗚𝗘 𝗨𝗣𝗗𝗔𝗧𝗘𝗗**\n\n"
+            f"🌐 Quiz Language: **{lang_display}**\n\n"
+            f"{'📝 Quizzes will now appear in English' if language == 'english' else '📝 अब प्रश्न हिंदी में आएंगे'}\n\n"
+            f"📊 Leaderboard remains same for all languages!",
+            parse_mode='Markdown'
+        )
+        logger.info(f"Language set to {language} for chat {chat_id}")
     
     async def send_daily_leaderboards(self, context: ContextTypes.DEFAULT_TYPE = None):
         """Send daily leaderboards at 10:00 PM IST to groups and users' private chats - shows last 24 hours scores"""
@@ -3728,9 +3706,25 @@ Let's connect with Aman Directly, privately and securely!
         try:
             await q.answer()
         except: pass
-        
+
+        user = q.from_user
+
+        # Check force join for private chat callbacks (admins bypass)
+        if q.message and q.message.chat.type == 'private':
+            if not await db.is_admin(user.id):
+                is_joined, missing_groups = await self.check_force_join(user.id, context)
+                if not is_joined:
+                    await q.answer("❌ Please join all required groups first!", show_alert=True)
+                    await self.send_force_join_message(update, context, user.id, missing_groups)
+                    return
+
         data = q.data
-        if data.startswith("promote_"):
+
+        # Language selection buttons
+        if data.startswith("lang_"):
+            await self._handle_lang_callback(q, context)
+            return
+        elif data.startswith("promote_"):
             pid = data.split('_')[1]
             kb = [[InlineKeyboardButton("💎 Standard (₹99)", url=f"https://t.me/SansaAdsBot?text={quote(f'Standard Post {pid}')}")],
                   [InlineKeyboardButton("🔥 Mega (₹149)", url=f"https://t.me/SansaAdsBot?text={quote(f'Mega Post {pid}')}")],
