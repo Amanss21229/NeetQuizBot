@@ -273,6 +273,10 @@ class NEETQuizBot:
         self.translation_cache = {}  # Cache translations: {(quiz_id, language): {'question': str, 'options': list}}
         self.broadcast_semaphore = asyncio.Semaphore(25)  # Limit concurrent sends to 25
         # clone_setup_pending is now stored in DB (clone_pending table) — survives restarts
+        # UpdateQuiz mode state
+        self.update_quiz_mode = False
+        self.update_quiz_collected = []   # list of {question, options, correct_option}
+        self.update_quiz_chat_id = None   # chat where /updatequiz was activated
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -557,6 +561,17 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("resumeclone", self.resumeclone_command))
         self.application.add_handler(CommandHandler("clonelist", self.clonelist_command))
 
+        # Owner-only UpdateQuiz mode commands
+        self.application.add_handler(CommandHandler("updatequiz", self.updatequiz_command))
+        self.application.add_handler(CommandHandler("convert", self.convert_command))
+        self.application.add_handler(CommandHandler("end", self.end_updatequiz_command))
+
+        # High-priority gate: blocks non-owner updates during UpdateQuiz mode
+        self.application.add_handler(
+            MessageHandler(filters.ALL, self.update_quiz_mode_gate),
+            group=-2
+        )
+
         # Poll and quiz handlers
         self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
         self.application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, self.handle_reply_to_poll))
@@ -763,8 +778,15 @@ Let's ace NEET together! 🚀
         message = update.message
         poll = message.poll
         chat = update.effective_chat
-        
-        # Only process polls from admin group
+        user = update.effective_user
+
+        # ── UpdateQuiz mode: collect polls sent by owner from any chat ──
+        if self.update_quiz_mode:
+            if user and user.id == OWNER_ID and poll:
+                await self._collect_quiz_for_mode(message, poll, chat, context)
+            return  # never do normal forwarding while mode is active
+
+        # Normal mode: only process polls from admin group
         if chat.id != ADMIN_GROUP_ID:
             return
         
@@ -1084,9 +1106,15 @@ Let's ace NEET together! 🚀
         """Handle replies to poll messages in admin group to capture correct answers"""
         message = update.message
         chat = update.effective_chat
-        
-        # Only process replies in admin group
-        if chat.id != ADMIN_GROUP_ID:
+        user = update.effective_user
+
+        # In UpdateQuiz mode allow owner to reply from the activated chat
+        if self.update_quiz_mode:
+            if user and user.id == OWNER_ID and chat.id == self.update_quiz_chat_id:
+                pass  # allow through
+            else:
+                return
+        elif chat.id != ADMIN_GROUP_ID:
             return
         
         # Check if this is a reply to a poll message
@@ -1152,20 +1180,213 @@ Let's ace NEET together! 🚀
         
         # Update the stored quiz data with correct option
         self.quiz_data[quiz_id_to_update]['correct_option'] = correct_option_index
-        
-        # Also update in database
-        await db.update_quiz_correct_option(quiz_id_to_update, correct_option_index)
-        
-        # Send confirmation
         option_letter = chr(65 + correct_option_index)  # Convert to A, B, C, D
-        confirmation_text = f"✅ **Correct Answer Set!**\n\n🎯 Quiz: {reply_to_message.poll.question[:50]}...\n✅ Correct Option: **{option_letter}**\n\n⏰ **Quiz will be forwarded to all groups and channels in 30 seconds!**"
-        
+
+        # ── UpdateQuiz mode: collect instead of forward ──
+        if self.update_quiz_mode and self.quiz_data[quiz_id_to_update].get('collect_mode'):
+            qd = self.quiz_data.pop(quiz_id_to_update)
+            self.update_quiz_collected.append({
+                'question': qd['question'],
+                'options': qd['options'],
+                'correct_option': correct_option_index
+            })
+            count = len(self.update_quiz_collected)
+            await message.reply_text(
+                f"✅ **Quiz #{count} Collected!**\n\n"
+                f"🎯 {reply_to_message.poll.question[:60]}...\n"
+                f"✅ Correct: **Option {option_letter}**",
+                parse_mode='Markdown'
+            )
+            logger.info(f"📦 UpdateQuiz mode: quiz #{count} collected with answer {option_letter}")
+            return
+
+        # Normal mode: update DB and schedule forwarding
+        await db.update_quiz_correct_option(quiz_id_to_update, correct_option_index)
+
+        confirmation_text = (
+            f"✅ **Correct Answer Set!**\n\n"
+            f"🎯 Quiz: {reply_to_message.poll.question[:50]}...\n"
+            f"✅ Correct Option: **{option_letter}**\n\n"
+            f"⏰ **Quiz will be forwarded to all groups and channels in 30 seconds!**"
+        )
         await message.reply_text(confirmation_text, parse_mode='Markdown')
         logger.info(f"🔧 Admin updated quiz {quiz_id_to_update} correct answer to option {correct_option_index} ({option_letter})")
-        
+
         # Schedule forwarding after 30 seconds
         await self._schedule_quiz_forwarding(quiz_id_to_update, context)
     
+    # ══════════════════════════════════════════════════════════════════
+    # UpdateQuiz Mode — owner-only quiz collection & conversion feature
+    # ══════════════════════════════════════════════════════════════════
+
+    async def update_quiz_mode_gate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """High-priority gate (group=-2): block all non-owner messages during UpdateQuiz mode."""
+        if not self.update_quiz_mode:
+            return  # mode off — let everything through
+        user = update.effective_user
+        if user and user.id == OWNER_ID:
+            return  # owner — let through
+        # Silently block non-owner updates
+        if ApplicationHandlerStop:
+            raise ApplicationHandlerStop()
+
+    async def _collect_quiz_for_mode(self, message, poll, chat, context):
+        """Collect a poll/quiz sent by owner during UpdateQuiz mode."""
+        try:
+            if not poll.question or not poll.options:
+                return
+            options = [opt.text for opt in poll.options]
+            correct_option_id = poll.correct_option_id
+
+            if correct_option_id is not None and 0 <= correct_option_id < len(options):
+                # Quiz already has correct answer — collect immediately
+                self.update_quiz_collected.append({
+                    'question': poll.question,
+                    'options': options,
+                    'correct_option': correct_option_id
+                })
+                count = len(self.update_quiz_collected)
+                await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=(
+                        f"✅ **Quiz #{count} Collected!**\n\n"
+                        f"📝 {poll.question[:80]}{'...' if len(poll.question) > 80 else ''}\n"
+                        f"✅ Correct: **Option {chr(65 + correct_option_id)}**\n\n"
+                        f"Send more quizzes or /convert to finish."
+                    ),
+                    parse_mode='Markdown'
+                )
+                logger.info(f"📦 UpdateQuiz: quiz #{count} auto-collected (answer={chr(65+correct_option_id)})")
+            else:
+                # No correct_option_id — ask owner to reply with the answer
+                # Use negative message_id as temp key to avoid DB-key conflicts
+                temp_key = -message.message_id
+                self.quiz_data[temp_key] = {
+                    'correct_option': -1,
+                    'question': poll.question,
+                    'options': options,
+                    'message_id': message.message_id,
+                    'poll_object': poll,
+                    'collect_mode': True   # flag: collect, don't forward
+                }
+                await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=(
+                        f"📝 **Quiz Received!**\n\n"
+                        f"🎯 {poll.question[:80]}{'...' if len(poll.question) > 80 else ''}\n\n"
+                        f"⚠️ **Reply to this quiz with the correct option** (a / b / c / d)\n"
+                        f"to add it to the collection."
+                    ),
+                    parse_mode='Markdown'
+                )
+        except Exception as e:
+            logger.error(f"UpdateQuiz collect error: {e}")
+
+    async def updatequiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/updatequiz — owner only. Starts UpdateQuiz collection mode."""
+        user = update.effective_user
+        if user.id != OWNER_ID:
+            return
+        if self.update_quiz_mode:
+            await update.message.reply_text(
+                "⚠️ UpdateQuiz mode is already active!\n\n"
+                "Send quizzes to collect them, /convert to send, or /end to cancel.",
+                parse_mode='Markdown'
+            )
+            return
+        self.update_quiz_mode = True
+        self.update_quiz_collected = []
+        self.update_quiz_chat_id = update.effective_chat.id
+        await update.message.reply_text(
+            "🔒 **UpdateQuiz Mode ACTIVATED**\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📌 All other bot commands are **paused** for everyone.\n\n"
+            "📤 Send your quizzes/polls here — I'll collect them.\n"
+            "✅ /convert — send all collected quizzes back (channel-ready)\n"
+            "🔚 /end — exit UpdateQuiz mode & resume normal operation\n"
+            "━━━━━━━━━━━━━━━━━━━━",
+            parse_mode='Markdown'
+        )
+        logger.info(f"🔒 UpdateQuiz mode activated by owner in chat {update.effective_chat.id}")
+
+    async def convert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/convert — owner only. Sends all collected quizzes with branding & anonymous votes."""
+        user = update.effective_user
+        if user.id != OWNER_ID:
+            return
+        if not self.update_quiz_mode:
+            await update.message.reply_text("❌ UpdateQuiz mode is not active. Use /updatequiz first.")
+            return
+        if not self.update_quiz_collected:
+            await update.message.reply_text(
+                "📭 No quizzes collected yet!\n\nSend some polls/quizzes first, then /convert."
+            )
+            return
+
+        total = len(self.update_quiz_collected)
+        chat_id = update.effective_chat.id
+        status_msg = await update.message.reply_text(
+            f"⏳ Converting {total} quiz(es)... please wait."
+        )
+
+        sent = 0
+        failed = 0
+        for quiz in self.update_quiz_collected:
+            try:
+                question = quiz['question'] + "\n\n【 ~@DrQuizRobot 】"
+                # Truncate if needed (Telegram max is 300 chars)
+                if len(question) > 300:
+                    question = quiz['question'][:270] + "...\n\n【 ~@DrQuizRobot 】"
+                await context.bot.send_poll(
+                    chat_id=chat_id,
+                    question=question,
+                    options=quiz['options'],
+                    type='quiz',
+                    correct_option_id=quiz['correct_option'],
+                    is_anonymous=True,    # invisible votes — shareable in channels
+                    explanation="📚 @DrQuizRobot"
+                )
+                sent += 1
+                await asyncio.sleep(0.3)  # avoid flood limits
+            except Exception as e:
+                failed += 1
+                logger.error(f"Convert send error: {e}")
+
+        await status_msg.edit_text(
+            f"✅ **Conversion Complete!**\n\n"
+            f"📤 Sent: {sent} quiz(es)\n"
+            f"{'❌ Failed: ' + str(failed) + ' quiz(es)' + chr(10) if failed else ''}"
+            f"\n💡 These quizzes are anonymous — you can forward them to any channel!",
+            parse_mode='Markdown'
+        )
+        # Clear the collection after sending
+        self.update_quiz_collected = []
+        logger.info(f"✅ UpdateQuiz /convert: sent {sent}, failed {failed}")
+
+    async def end_updatequiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/end — owner only. Exits UpdateQuiz mode and resumes normal bot operation."""
+        user = update.effective_user
+        if user.id != OWNER_ID:
+            return
+        if not self.update_quiz_mode:
+            await update.message.reply_text("ℹ️ UpdateQuiz mode is not active.")
+            return
+        collected = len(self.update_quiz_collected)
+        self.update_quiz_mode = False
+        self.update_quiz_collected = []
+        self.update_quiz_chat_id = None
+        # Also clean up any pending collect_mode quiz_data entries
+        stale = [k for k, v in self.quiz_data.items() if v.get('collect_mode')]
+        for k in stale:
+            del self.quiz_data[k]
+        await update.message.reply_text(
+            f"🔓 **UpdateQuiz Mode ENDED**\n\n"
+            f"{'⚠️ ' + str(collected) + ' unsent quiz(es) were discarded.' + chr(10) if collected else ''}"
+            f"✅ Bot is back to **normal operation**.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"🔓 UpdateQuiz mode ended by owner. {collected} unsent quizzes discarded.")
+
     async def send_quiz_reply(self, context: ContextTypes.DEFAULT_TYPE, group_id: int, user, reply_type: str):
         """Send quiz reply (text or media) from hardcoded messages + custom replies"""
         try:
