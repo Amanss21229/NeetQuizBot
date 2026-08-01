@@ -1016,7 +1016,6 @@ Let's ace NEET together! 🚀
                                 c_options = self.translation_cache[cache_key]['options']
                             else:
                                 try:
-                                    from deep_translator import GoogleTranslator
                                     translator = GoogleTranslator(source='auto', target='hi')
                                     c_question = translator.translate(poll.question)
                                     c_options = [translator.translate(opt) for opt in options]
