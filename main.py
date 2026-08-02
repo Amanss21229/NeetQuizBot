@@ -782,7 +782,7 @@ Let's ace NEET together! 🚀
 
         # ── UpdateQuiz mode: collect polls sent by owner from any chat ──
         if self.update_quiz_mode:
-            if user and user.id == OWNER_ID and poll:
+            if user and await db.is_admin(user.id) and poll:
                 await self._collect_quiz_for_mode(message, poll, chat, context)
             return  # never do normal forwarding while mode is active
 
@@ -1108,9 +1108,9 @@ Let's ace NEET together! 🚀
         chat = update.effective_chat
         user = update.effective_user
 
-        # In UpdateQuiz mode allow owner to reply from the activated chat
+        # In UpdateQuiz mode allow admin to reply from the activated chat
         if self.update_quiz_mode:
-            if user and user.id == OWNER_ID and chat.id == self.update_quiz_chat_id:
+            if user and await db.is_admin(user.id) and chat.id == self.update_quiz_chat_id:
                 pass  # allow through
             else:
                 return
@@ -1220,18 +1220,18 @@ Let's ace NEET together! 🚀
     # ══════════════════════════════════════════════════════════════════
 
     async def update_quiz_mode_gate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """High-priority gate (group=-2): block all non-owner messages during UpdateQuiz mode."""
+        """High-priority gate (group=-2): block all non-admin messages during UpdateQuiz mode."""
         if not self.update_quiz_mode:
             return  # mode off — let everything through
         user = update.effective_user
-        if user and user.id == OWNER_ID:
-            return  # owner — let through
-        # Silently block non-owner updates
+        if user and await db.is_admin(user.id):
+            return  # admin — let through
+        # Silently block non-admin updates
         if ApplicationHandlerStop:
             raise ApplicationHandlerStop()
 
     async def _collect_quiz_for_mode(self, message, poll, chat, context):
-        """Collect a poll/quiz sent by owner during UpdateQuiz mode."""
+        """Collect a poll/quiz sent by admin during UpdateQuiz mode."""
         try:
             if not poll.question or not poll.options:
                 return
@@ -1283,9 +1283,9 @@ Let's ace NEET together! 🚀
             logger.error(f"UpdateQuiz collect error: {e}")
 
     async def updatequiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """/updatequiz — owner only. Starts UpdateQuiz collection mode."""
+        """/updatequiz — admin only. Starts UpdateQuiz collection mode."""
         user = update.effective_user
-        if user.id != OWNER_ID:
+        if not await db.is_admin(user.id):
             return
         if self.update_quiz_mode:
             await update.message.reply_text(
@@ -1310,9 +1310,9 @@ Let's ace NEET together! 🚀
         logger.info(f"🔒 UpdateQuiz mode activated by owner in chat {update.effective_chat.id}")
 
     async def convert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """/convert — owner only. Sends all collected quizzes with branding & anonymous votes."""
+        """/convert — admin only. Sends all collected quizzes with branding & anonymous votes."""
         user = update.effective_user
-        if user.id != OWNER_ID:
+        if not await db.is_admin(user.id):
             return
         if not self.update_quiz_mode:
             await update.message.reply_text("❌ UpdateQuiz mode is not active. Use /updatequiz first.")
@@ -1364,9 +1364,9 @@ Let's ace NEET together! 🚀
         logger.info(f"✅ UpdateQuiz /convert: sent {sent}, failed {failed}")
 
     async def end_updatequiz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """/end — owner only. Exits UpdateQuiz mode and resumes normal bot operation."""
+        """/end — admin only. Exits UpdateQuiz mode and resumes normal bot operation."""
         user = update.effective_user
-        if user.id != OWNER_ID:
+        if not await db.is_admin(user.id):
             return
         if not self.update_quiz_mode:
             await update.message.reply_text("ℹ️ UpdateQuiz mode is not active.")
