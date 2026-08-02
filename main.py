@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import html
 import json
 import logging
 import os
@@ -561,6 +562,10 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("resumeclone", self.resumeclone_command))
         self.application.add_handler(CommandHandler("clonelist", self.clonelist_command))
 
+        # Top users/groups commands
+        self.application.add_handler(CommandHandler("top", self.top_command))
+        self.application.add_handler(CommandHandler("fgroup", self.fgroup_command))
+
         # Owner-only UpdateQuiz mode commands
         self.application.add_handler(CommandHandler("updatequiz", self.updatequiz_command))
         self.application.add_handler(CommandHandler("convert", self.convert_command))
@@ -677,7 +682,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         
         # If in group, add user as group member
         if chat.type in ['group', 'supergroup']:
-            await db.add_group(chat.id, chat.title, chat.type)
+            await db.add_group(chat.id, chat.title, chat.type, username=chat.username)
             await db.add_group_member(user.id, chat.id)
         
         # Handle deep link parameters (e.g., /start mymistake)
@@ -755,7 +760,7 @@ Let's ace NEET together! 🚀
         
         if my_member.new_chat_member.status in ['member', 'administrator']:
             # Bot was added to group
-            await db.add_group(chat.id, chat.title, chat.type)
+            await db.add_group(chat.id, chat.title, chat.type, username=chat.username)
             logger.info(f"Bot added to group: {chat.title} ({chat.id})")
 
     async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -769,7 +774,7 @@ Let's ace NEET together! 🚀
             }
             # Try to add to database (may fail if DB is down)
             try:
-                await db.add_group(chat.id, chat.title or "Unknown Group/Channel", chat.type)
+                await db.add_group(chat.id, chat.title or "Unknown Group/Channel", chat.type, username=chat.username)
             except Exception as e:
                 logger.warning(f"Failed to add group/channel to database: {e}")
     
@@ -2801,7 +2806,89 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Stats error: {e}")
             await update.message.reply_text("❌ Error fetching statistics.")
-    
+
+    async def top_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/top N — show top N most-active users and groups (N up to 50, default 10)."""
+        # Parse N
+        try:
+            n = int(context.args[0]) if context.args else 10
+        except (ValueError, IndexError):
+            n = 10
+        n = max(1, min(n, 50))
+
+        try:
+            users = await db.get_top_users_by_activity(n)
+            groups = await db.get_top_groups_by_activity(n)
+
+            # ── Users section ──
+            medals = ["🥇", "🥈", "🥉"]
+            user_lines = []
+            for i, u in enumerate(users, start=1):
+                name = html.escape(u["first_name"] or u["username"] or "Unknown")
+                link = f'<a href="tg://user?id={u["id"]}">{name}</a>'
+                prefix = medals[i - 1] if i <= 3 else f"{i}."
+                user_lines.append(f"{prefix} {link} — {u['answer_count']} answers")
+
+            # ── Groups section ──
+            group_lines = []
+            for i, g in enumerate(groups, start=1):
+                title = html.escape(g["title"] or "Unknown Group")
+                if g["username"]:
+                    link = f'<a href="https://t.me/{g["username"]}">{title}</a>'
+                else:
+                    link = title
+                prefix = medals[i - 1] if i <= 3 else f"{i}."
+                group_lines.append(f"{prefix} {link} — {g['answer_count']} answers")
+
+            text = (
+                f"🏆 <b>Top {n} Most Active Users</b>\n\n"
+                + ("\n".join(user_lines) if user_lines else "No data yet.")
+                + f"\n\n📊 <b>Top {n} Most Active Groups</b>\n\n"
+                + ("\n".join(group_lines) if group_lines else "No data yet.")
+            )
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.error(f"Top command error: {e}")
+            await update.message.reply_text("❌ Error fetching top list.")
+
+    async def fgroup_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/fgroup N — show top N groups by member count (admin only, N up to 50, default 10)."""
+        user = update.effective_user
+        if not await db.is_admin(user.id):
+            await update.message.reply_text("❌ You are not authorized to use this command.")
+            return
+
+        try:
+            n = int(context.args[0]) if context.args else 10
+        except (ValueError, IndexError):
+            n = 10
+        n = max(1, min(n, 50))
+
+        try:
+            groups = await db.get_top_groups_by_members(n)
+
+            medals = ["🥇", "🥈", "🥉"]
+            lines = []
+            for i, g in enumerate(groups, start=1):
+                title = html.escape(g["title"] or "Unknown Group")
+                if g["username"]:
+                    link = f'<a href="https://t.me/{g["username"]}">{title}</a>'
+                else:
+                    link = title
+                prefix = medals[i - 1] if i <= 3 else f"{i}."
+                lines.append(f"{prefix} {link} — {g['member_count']} members")
+
+            text = (
+                f"🏢 <b>Top {n} Groups by Members</b>\n\n"
+                + ("\n".join(lines) if lines else "No data yet.")
+            )
+            await update.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.error(f"Fgroup command error: {e}")
+            await update.message.reply_text("❌ Error fetching group list.")
+
     async def promote_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /promote command (admin only)"""
         user = update.effective_user

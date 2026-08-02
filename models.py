@@ -152,6 +152,19 @@ class Database:
                 END $$;
             """)
 
+            # Migration: Add username to groups (for clickable group links)
+            await conn.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='groups' AND column_name='username'
+                    ) THEN
+                        ALTER TABLE groups ADD COLUMN username TEXT DEFAULT NULL;
+                    END IF;
+                END $$;
+            """)
+
             # Clone bots table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS clone_bots (
@@ -357,20 +370,21 @@ class Database:
             """, user_id)
             return dict(row) if row else None
     
-    async def add_group(self, group_id: int, title: str, group_type: str, clone_bot_id: Optional[int] = None):
+    async def add_group(self, group_id: int, title: str, group_type: str, username: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update group in database"""
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO groups (id, title, type, clone_bot_id, updated_at)
-                VALUES ($1, $2, $3, $4, NOW())
+                INSERT INTO groups (id, title, type, username, clone_bot_id, updated_at)
+                VALUES ($1, $2, $3, $4, $5, NOW())
                 ON CONFLICT (id) DO UPDATE SET
                     title = $2,
                     type = $3,
+                    username = COALESCE(EXCLUDED.username, groups.username),
                     clone_bot_id = COALESCE(groups.clone_bot_id, EXCLUDED.clone_bot_id),
                     updated_at = NOW()
-            """, group_id, title, group_type, clone_bot_id)
+            """, group_id, title, group_type, username, clone_bot_id)
     
     async def add_group_member(self, user_id: int, group_id: int):
         """Add user to group"""
@@ -519,6 +533,56 @@ class Database:
             """, limit)
             return [dict(row) for row in rows]
     
+    async def get_top_users_by_activity(self, limit: int = 10) -> List[Dict]:
+        """Get top N users ranked by total quiz answers submitted"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT u.id, u.username, u.first_name, u.last_name,
+                       COUNT(uqs.id) AS answer_count
+                FROM users u
+                JOIN user_quiz_scores uqs ON u.id = uqs.user_id
+                GROUP BY u.id, u.username, u.first_name, u.last_name
+                ORDER BY answer_count DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+
+    async def get_top_groups_by_activity(self, limit: int = 10) -> List[Dict]:
+        """Get top N groups ranked by total quiz answers submitted in them"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT g.id, g.title, g.username,
+                       COUNT(uqs.id) AS answer_count
+                FROM groups g
+                JOIN user_quiz_scores uqs ON g.id = uqs.group_id
+                WHERE g.is_active = TRUE
+                GROUP BY g.id, g.title, g.username
+                ORDER BY answer_count DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+
+    async def get_top_groups_by_members(self, limit: int = 10) -> List[Dict]:
+        """Get top N active groups ranked by registered member count"""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT g.id, g.title, g.username,
+                       COUNT(gm.user_id) AS member_count
+                FROM groups g
+                JOIN group_members gm ON g.id = gm.group_id
+                WHERE g.is_active = TRUE
+                GROUP BY g.id, g.title, g.username
+                ORDER BY member_count DESC
+                LIMIT $1
+            """, limit)
+            return [dict(row) for row in rows]
+
     async def get_all_groups(self) -> List[Dict]:
         """Get all active groups"""
         if not self.pool:
