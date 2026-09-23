@@ -683,7 +683,7 @@ class Database:
                 WHERE user_id = $1
             """, user_id)
 
-            async def add_ai_credits(
+    async def add_ai_credits(
         self,
         user_id: int,
         amount: int,
@@ -750,7 +750,7 @@ class Database:
 
                 return dict(row)
 
-                    async def consume_ai_credit(
+    async def consume_ai_credit(
         self,
         user_id: int,
         amount: int = 1,
