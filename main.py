@@ -3950,13 +3950,13 @@ Let's connect with Aman Directly, privately and securely!
     ):
         """Keep Telegram's typing indicator active while AI is generating."""
 
-    while True:
-        await self.application.bot.send_chat_action(
-            chat_id=chat_id,
-            action=ChatAction.TYPING
-        )
-
-        await asyncio.sleep(4)
+        while True:
+            await self.application.bot.send_chat_action(
+                chat_id=chat_id,
+                action=ChatAction.TYPING
+            )
+            
+            await asyncio.sleep(4)
 
     async def private_ai_message(
         self,
@@ -4001,26 +4001,26 @@ Let's connect with Aman Directly, privately and securely!
         )[-12:]
 
         typing_task = asyncio.create_task(
-    self._private_ai_typing_loop(
-        update.effective_chat.id
-    )
-)
+            self._private_ai_typing_loop(
+                update.effective_chat.id
+            )
+        )
 
-try:
-    result = await self.private_ai.respond(
-        user_id,
-        user_text,
-        history=history
-    )
+        try:
+            result = await self.private_ai.respond(
+                user_id,
+                user_text,
+                history=history
+            )
 
-except Exception as exc:
+        except Exception as exc:
+            typing_task.cancel()
 
-    typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
 
-    try:
-        await typing_task
-    except asyncio.CancelledError:
-        pass
             logger.exception(
                 "Private AI error for user %s: %s",
                 user_id,
@@ -4029,7 +4029,7 @@ except Exception as exc:
 
             await update.message.reply_text(
                 "⚠️ AI service is temporarily unavailable. "
-                "Please try again in a moment."
+                "Please try again in a moment.",
                 reply_to_message_id=update.message.message_id
             )
             return
@@ -4049,6 +4049,12 @@ except Exception as exc:
             ])
 
             self.ai_histories[user_id] = history[-12:]
+                    typing_task.cancel()
+
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
 
         await update.message.reply_text(
             result.text
