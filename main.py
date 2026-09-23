@@ -4016,10 +4016,10 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as exc:
             typing_task.cancel()
 
-        try:
-                await typing_task
-            except asyncio.CancelledError:
-                pass
+         try:
+             await typing_task
+        except asyncio.CancelledError:
+            pass
 
             logger.exception(
                 "Private AI error for user %s: %s",
@@ -4033,7 +4033,7 @@ Let's connect with Aman Directly, privately and securely!
                 reply_to_message_id=update.message.message_id
             )
             return
-
+            
         if result.safety_category == "normal":
             history = list(history)
 
