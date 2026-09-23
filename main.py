@@ -3943,7 +3943,7 @@ Let's connect with Aman Directly, privately and securely!
             parse_mode="Markdown"
         )
 
-        async def private_ai_message(
+    async def private_ai_message(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
