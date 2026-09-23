@@ -339,6 +339,119 @@ class Database:
                 ON button_posts(user_id)
             """)
 
+                # ============================================================
+            # PRIVATE AI SYSTEM TABLES
+            # ============================================================
+
+            # AI user profile and long-term personalization memory
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_profiles (
+                    user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    preferred_name TEXT,
+                    age INTEGER,
+                    city TEXT,
+                    gender TEXT,
+                    study_class TEXT,
+                    exam_target TEXT,
+                    goals TEXT,
+                    preferences TEXT,
+                    memory_summary TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # AI credit balance
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_credits (
+                    user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    balance INTEGER NOT NULL DEFAULT 0,
+                    total_earned BIGINT NOT NULL DEFAULT 0,
+                    total_used BIGINT NOT NULL DEFAULT 0,
+                    last_bonus_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    CONSTRAINT ai_credits_balance_nonnegative
+                        CHECK (balance >= 0)
+                )
+            """)
+
+            # Every credit addition/deduction is recorded here
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_credit_transactions (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    amount INTEGER NOT NULL,
+                    transaction_type TEXT NOT NULL,
+                    balance_after INTEGER NOT NULL,
+                    admin_id BIGINT NULL,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Active AI chat sessions
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_sessions (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    started_at TIMESTAMP DEFAULT NOW(),
+                    last_activity_at TIMESTAMP DEFAULT NOW(),
+                    last_billed_at TIMESTAMP DEFAULT NOW(),
+                    credits_consumed INTEGER NOT NULL DEFAULT 0,
+                    active BOOLEAN NOT NULL DEFAULT TRUE
+                )
+            """)
+
+            # Persistent reminders/tasks created by users
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_tasks (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    task_text TEXT NOT NULL,
+                    schedule_type TEXT NOT NULL,
+                    schedule_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+                    next_run_at TIMESTAMP NULL,
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Mapping between a Telegram user and their Activity GC forum topic
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_activity (
+                    user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    activity_group_id BIGINT NOT NULL,
+                    topic_id BIGINT NOT NULL,
+                    topic_name TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Useful indexes
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ai_credit_transactions_user
+                ON ai_credit_transactions(user_id, created_at DESC)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ai_sessions_user_active
+                ON ai_sessions(user_id, active)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ai_tasks_user_active
+                ON ai_tasks(user_id, active)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ai_tasks_next_run
+                ON ai_tasks(next_run_at)
+                WHERE active = TRUE
+            """)
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update user in database"""
@@ -369,6 +482,500 @@ class Database:
                 WHERE id = $1
             """, user_id)
             return dict(row) if row else None
+
+        # ============================================================
+    # PRIVATE AI PROFILE METHODS
+    # ============================================================
+
+    async def get_ai_profile(self, user_id: int) -> Optional[Dict]:
+        """Get private AI profile for a user."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    user_id,
+                    preferred_name,
+                    age,
+                    city,
+                    gender,
+                    study_class,
+                    exam_target,
+                    goals,
+                    preferences,
+                    memory_summary,
+                    created_at,
+                    updated_at
+                FROM ai_profiles
+                WHERE user_id = $1
+            """, user_id)
+
+            return dict(row) if row else None
+
+    async def create_ai_profile(self, user_id: int) -> Dict:
+        """Create an empty AI profile if one does not already exist."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO ai_profiles (user_id)
+                VALUES ($1)
+                ON CONFLICT (user_id) DO NOTHING
+                RETURNING *
+            """, user_id)
+
+            if row:
+                return dict(row)
+
+            existing = await conn.fetchrow("""
+                SELECT *
+                FROM ai_profiles
+                WHERE user_id = $1
+            """, user_id)
+
+            return dict(existing)
+
+    async def update_ai_profile(
+        self,
+        user_id: int,
+        preferred_name: Optional[str] = None,
+        age: Optional[int] = None,
+        city: Optional[str] = None,
+        gender: Optional[str] = None,
+        study_class: Optional[str] = None,
+        exam_target: Optional[str] = None,
+        goals: Optional[str] = None,
+        preferences: Optional[str] = None,
+        memory_summary: Optional[str] = None
+    ):
+        """Update only supplied AI profile fields."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        await self.create_ai_profile(user_id)
+
+        updates = []
+        values = []
+        index = 1
+
+        fields = {
+            "preferred_name": preferred_name,
+            "age": age,
+            "city": city,
+            "gender": gender,
+            "study_class": study_class,
+            "exam_target": exam_target,
+            "goals": goals,
+            "preferences": preferences,
+            "memory_summary": memory_summary,
+        }
+
+        for field, value in fields.items():
+            if value is not None:
+                updates.append(f"{field} = ${index}")
+                values.append(value)
+                index += 1
+
+        if not updates:
+            return
+
+        values.append(user_id)
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                UPDATE ai_profiles
+                SET {", ".join(updates)},
+                    updated_at = NOW()
+                WHERE user_id = ${index}
+                """,
+                *values
+            )
+
+        # ============================================================
+    # PRIVATE AI CREDIT METHODS
+    # ============================================================
+
+    async def get_ai_credits(self, user_id: int) -> Optional[Dict]:
+        """Get current AI credit information."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    user_id,
+                    balance,
+                    total_earned,
+                    total_used,
+                    last_bonus_at,
+                    created_at,
+                    updated_at
+                FROM ai_credits
+                WHERE user_id = $1
+            """, user_id)
+
+            return dict(row) if row else None
+
+    async def initialize_ai_credits(
+        self,
+        user_id: int,
+        initial_credits: int = 30
+    ) -> bool:
+        """
+        Give the one-time new-user AI credit gift.
+
+        Returns True only when the row was created.
+        Existing users receive nothing.
+        """
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    INSERT INTO ai_credits (
+                        user_id,
+                        balance,
+                        total_earned
+                    )
+                    VALUES ($1, $2, $2)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING user_id, balance
+                """, user_id, initial_credits)
+
+                if not row:
+                    return False
+
+                await conn.execute("""
+                    INSERT INTO ai_credit_transactions (
+                        user_id,
+                        amount,
+                        transaction_type,
+                        balance_after,
+                        metadata
+                    )
+                    VALUES ($1, $2, 'WELCOME', $2, $3::jsonb)
+                """,
+                    user_id,
+                    initial_credits,
+                    json.dumps({
+                        "reason": "new_user_welcome_gift"
+                    })
+                )
+
+                return True
+
+    async def get_last_bonus_at(
+        self,
+        user_id: int
+    ) -> Optional[datetime]:
+        """Return the last daily bonus claim time."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                SELECT last_bonus_at
+                FROM ai_credits
+                WHERE user_id = $1
+            """, user_id)
+
+            async def add_ai_credits(
+        self,
+        user_id: int,
+        amount: int,
+        transaction_type: str,
+        admin_id: Optional[int] = None,
+        metadata: Optional[Dict] = None
+    ) -> Optional[Dict]:
+        """
+        Atomically add AI credits and create an audit transaction.
+        """
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        if amount <= 0:
+            raise ValueError("Credit amount must be greater than zero")
+
+        metadata = metadata or {}
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Ensure credit row exists.
+                await conn.execute("""
+                    INSERT INTO ai_credits (user_id)
+                    VALUES ($1)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, user_id)
+
+                row = await conn.fetchrow("""
+                    UPDATE ai_credits
+                    SET
+                        balance = balance + $2,
+                        total_earned = total_earned + $2,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                    RETURNING
+                        user_id,
+                        balance,
+                        total_earned,
+                        total_used,
+                        last_bonus_at
+                """, user_id, amount)
+
+                if not row:
+                    return None
+
+                await conn.execute("""
+                    INSERT INTO ai_credit_transactions (
+                        user_id,
+                        amount,
+                        transaction_type,
+                        balance_after,
+                        admin_id,
+                        metadata
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                    user_id,
+                    amount,
+                    transaction_type,
+                    row["balance"],
+                    admin_id,
+                    json.dumps(metadata)
+                )
+
+                return dict(row)
+
+                    async def consume_ai_credit(
+        self,
+        user_id: int,
+        amount: int = 1,
+        transaction_type: str = "AI_USAGE",
+        metadata: Optional[Dict] = None
+    ) -> Optional[Dict]:
+        """
+        Atomically consume AI credits.
+
+        Returns the updated balance information when successful.
+        Returns None when insufficient credits.
+        """
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        if amount <= 0:
+            raise ValueError("Credit amount must be greater than zero")
+
+        metadata = metadata or {}
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    UPDATE ai_credits
+                    SET
+                        balance = balance - $2,
+                        total_used = total_used + $2,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                      AND balance >= $2
+                    RETURNING
+                        user_id,
+                        balance,
+                        total_earned,
+                        total_used,
+                        last_bonus_at
+                """, user_id, amount)
+
+                if not row:
+                    return None
+
+                await conn.execute("""
+                    INSERT INTO ai_credit_transactions (
+                        user_id,
+                        amount,
+                        transaction_type,
+                        balance_after,
+                        metadata
+                    )
+                    VALUES ($1, $2, $3, $4, $5::jsonb)
+                """,
+                    user_id,
+                    -amount,
+                    transaction_type,
+                    row["balance"],
+                    json.dumps(metadata)
+                )
+
+                return dict(row)
+
+        # ============================================================
+    # PRIVATE AI TELEGRAM ACTIVITY METHODS
+    # ============================================================
+
+    async def get_ai_activity(self, user_id: int) -> Optional[Dict]:
+        """Get the Activity GC topic mapped to a user."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    user_id,
+                    activity_group_id,
+                    topic_id,
+                    topic_name,
+                    created_at,
+                    updated_at
+                FROM ai_activity
+                WHERE user_id = $1
+            """, user_id)
+
+            return dict(row) if row else None
+
+    async def save_ai_activity(
+        self,
+        user_id: int,
+        activity_group_id: int,
+        topic_id: int,
+        topic_name: Optional[str] = None
+    ):
+        """Create or update a user's Activity GC topic mapping."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO ai_activity (
+                    user_id,
+                    activity_group_id,
+                    topic_id,
+                    topic_name,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    activity_group_id = EXCLUDED.activity_group_id,
+                    topic_id = EXCLUDED.topic_id,
+                    topic_name = EXCLUDED.topic_name,
+                    updated_at = NOW()
+            """,
+                user_id,
+                activity_group_id,
+                topic_id,
+                topic_name
+            )
+
+        # ============================================================
+    # PRIVATE AI TASK METHODS
+    # ============================================================
+
+    async def create_ai_task(
+        self,
+        user_id: int,
+        task_text: str,
+        schedule_type: str,
+        schedule_data: Dict,
+        timezone_name: str = "Asia/Kolkata",
+        next_run_at: Optional[datetime] = None
+    ) -> int:
+        """Create a persistent AI reminder/task."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            task_id = await conn.fetchval("""
+                INSERT INTO ai_tasks (
+                    user_id,
+                    task_text,
+                    schedule_type,
+                    schedule_data,
+                    timezone,
+                    next_run_at
+                )
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+                RETURNING id
+            """,
+                user_id,
+                task_text,
+                schedule_type,
+                json.dumps(schedule_data),
+                timezone_name,
+                next_run_at
+            )
+
+            return int(task_id)
+
+    async def get_active_ai_tasks(
+        self,
+        user_id: Optional[int] = None
+    ) -> List[Dict]:
+        """Get active AI tasks, optionally for one user."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            if user_id is not None:
+                rows = await conn.fetch("""
+                    SELECT *
+                    FROM ai_tasks
+                    WHERE user_id = $1
+                      AND active = TRUE
+                    ORDER BY next_run_at NULLS LAST, id
+                """, user_id)
+            else:
+                rows = await conn.fetch("""
+                    SELECT *
+                    FROM ai_tasks
+                    WHERE active = TRUE
+                    ORDER BY next_run_at NULLS LAST, id
+                """)
+
+            return [dict(row) for row in rows]
+
+    async def deactivate_ai_task(
+        self,
+        task_id: int,
+        user_id: int
+    ) -> bool:
+        """Deactivate one user's AI task."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE ai_tasks
+                SET
+                    active = FALSE,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND user_id = $2
+                  AND active = TRUE
+            """, task_id, user_id)
+
+            return result.endswith("1")
+
+    async def update_ai_task_next_run(
+        self,
+        task_id: int,
+        next_run_at: Optional[datetime],
+        active: bool = True
+    ):
+        """Update the next scheduled execution of a task."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE ai_tasks
+                SET
+                    next_run_at = $2,
+                    active = $3,
+                    updated_at = NOW()
+                WHERE id = $1
+            """, task_id, next_run_at, active)
     
     async def add_group(self, group_id: int, title: str, group_type: str, username: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update group in database"""
