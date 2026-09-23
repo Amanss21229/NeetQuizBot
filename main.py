@@ -3771,7 +3771,7 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
 
-        async def private_ai_start(
+    async def private_ai_start(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
@@ -3823,8 +3823,8 @@ Let's connect with Aman Directly, privately and securely!
             "Just send me a message to start.",
             parse_mode="Markdown"
         )
-
-        async def private_ai_credits(
+        
+    async def private_ai_credits(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
@@ -3860,8 +3860,8 @@ Let's connect with Aman Directly, privately and securely!
             "🎁 Daily bonus: /bonus",
             parse_mode="Markdown"
         )
-
-                async def private_ai_bonus(
+        
+    async def private_ai_bonus(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE
@@ -4037,9 +4037,10 @@ Let's connect with Aman Directly, privately and securely!
                 "for %s: %s",
                 user_id,
                 exc
-    )
+            )
 
-        async def _archive_private_ai_turn(
+        
+    async def _archive_private_ai_turn(
         self,
         user,
         user_text,
