@@ -3945,10 +3945,10 @@ Let's connect with Aman Directly, privately and securely!
         )
 
     async def _private_ai_typing_loop(
-    self,
-    chat_id: int
-):
-    """Keep Telegram's typing indicator active while AI is generating."""
+        self,
+        chat_id: int
+    ):
+        """Keep Telegram's typing indicator active while AI is generating."""
 
     while True:
         await self.application.bot.send_chat_action(
