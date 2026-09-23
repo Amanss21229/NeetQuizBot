@@ -59,6 +59,9 @@ import threading
 from deep_translator import GoogleTranslator
 from urllib.parse import quote
 
+from private_ai import PrivateAI, ChatMessage
+from private_ai.gemini import GeminiProvider
+
 
 # Bot configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -67,6 +70,15 @@ if not BOT_TOKEN:
 ADMIN_GROUP_ID = -1003009412065
 TIMEZONE = pytz.timezone('Asia/Kolkata')
 OWNER_ID = 8147394357
+
+# Private AI configuration — MAIN BOT ONLY
+PRIVATE_AI_ENABLED = (
+    os.environ.get("PRIVATE_AI_ENABLED", "false").lower() == "true"
+)
+
+AI_ACTIVITY_GROUP_ID = int(
+    os.environ.get("AI_ACTIVITY_GROUP_ID", "0")
+)
 
 # Configure logging
 logging.basicConfig(
@@ -278,6 +290,11 @@ class NEETQuizBot:
         self.update_quiz_mode = False
         self.update_quiz_collected = []   # list of {question, options, correct_option}
         self.update_quiz_chat_id = None   # chat where /updatequiz was activated
+        # Private AI — main bot only.
+        # Clone bots never instantiate this subsystem.
+        self.private_ai = None
+        self.ai_provider = None
+        self.ai_histories = {}
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -490,6 +507,29 @@ Hello! To use this bot, you need to join our official groups/channels first.
             )
         except:
             pass  # Admin might already exist
+
+                # Initialize Private AI only when explicitly enabled.
+        # This subsystem belongs only to the main bot.
+        if PRIVATE_AI_ENABLED:
+            gemini_api_key = os.environ.get("GEMINI_API_KEY")
+
+            if not gemini_api_key:
+                raise RuntimeError(
+                    "PRIVATE_AI_ENABLED=true but GEMINI_API_KEY is missing"
+                )
+
+            self.ai_provider = GeminiProvider(
+                api_key=gemini_api_key
+            )
+
+            self.private_ai = PrivateAI(
+                db,
+                self.ai_provider
+            )
+
+            logger.info(
+                "Private AI subsystem initialized for main bot"
+            )
         
         # Register handlers
         self._register_handlers()
@@ -602,6 +642,32 @@ Hello! To use this bot, you need to join our official groups/channels first.
             ),
             group=-1
         )
+
+                # Private AI commands — main bot only.
+        self.application.add_handler(
+            CommandHandler("ai", self.private_ai_start)
+        )
+
+        self.application.add_handler(
+            CommandHandler("bonus", self.private_ai_bonus)
+        )
+
+        self.application.add_handler(
+            CommandHandler("credits", self.private_ai_credits)
+        )
+
+        # Private AI text handler runs after clone-token interception
+        # and before the existing admin-forwarding handler.
+        if PRIVATE_AI_ENABLED:
+            self.application.add_handler(
+                MessageHandler(
+                    filters.ChatType.PRIVATE
+                    & filters.TEXT
+                    & ~filters.COMMAND,
+                    self.private_ai_message
+                ),
+                group=0
+            )
 
         # Track any group where bot sees activity
         self.application.add_handler(MessageHandler(filters.ALL, self.track_groups))
@@ -3704,6 +3770,344 @@ Let's connect with Aman Directly, privately and securely!
             
         except Exception as e:
             logger.error(f"Error in weekly leaderboard reset: {e}")
+
+        async def private_ai_start(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Open Private AI on the main bot."""
+
+        if not PRIVATE_AI_ENABLED or self.private_ai is None:
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable. "
+                "Please try again later."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        gifted = await self.private_ai.prepare_user(user.id)
+
+        balance = await self.private_ai.credits.balance(
+            user.id
+        )
+
+        gift_message = (
+            "\n🎁 You received 30 free AI credits!"
+            if gifted
+            else ""
+        )
+
+        await update.message.reply_text(
+            "🤖 *Private AI Companion*\n\n"
+            "Talk to me like a study buddy, tutor, mentor "
+            "or supportive companion.\n\n"
+            f"💳 Credits: *{balance}*"
+            f"{gift_message}\n"
+            "🎁 Daily gift: /bonus\n"
+            "💳 Balance: /credits\n\n"
+            "🔒 *Privacy notice:* Private-AI messages and replies "
+            "are archived in the bot's admin-only Activity GC "
+            "for operation and moderation.\n\n"
+            "Just send me a message to start.",
+            parse_mode="Markdown"
+        )
+
+        async def private_ai_credits(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show Private AI credit balance."""
+
+        if not PRIVATE_AI_ENABLED or self.private_ai is None:
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        await self.private_ai.prepare_user(user.id)
+
+        balance = await self.private_ai.credits.balance(
+            user.id
+        )
+
+        await update.message.reply_text(
+            f"💳 *Your AI Credits:* {balance}\n\n"
+            "🎁 Daily bonus: /bonus",
+            parse_mode="Markdown"
+        )
+
+                async def private_ai_bonus(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Claim daily AI bonus once every 24 hours."""
+
+        if not PRIVATE_AI_ENABLED or self.private_ai is None:
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        await self.private_ai.prepare_user(user.id)
+
+        amount, next_time = (
+            await self.private_ai.credits.claim_daily_bonus(
+                user.id
+            )
+        )
+
+        if amount is None:
+            if next_time:
+                if next_time.tzinfo is None:
+                    next_time = TIMEZONE.localize(
+                        next_time
+                    )
+
+                remaining = (
+                    next_time - datetime.now(TIMEZONE)
+                )
+
+                seconds = max(
+                    0,
+                    int(remaining.total_seconds())
+                )
+
+                hours, remainder = divmod(
+                    seconds,
+                    3600
+                )
+
+                minutes = remainder // 60
+
+                await update.message.reply_text(
+                    "⏳ *Already Claimed!*\n\n"
+                    f"Next gift available in "
+                    f"*{hours}h {minutes}m*.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(
+                    "⏳ *Already Claimed!*\n"
+                    "Your next daily gift will be available later.",
+                    parse_mode="Markdown"
+                )
+
+            return
+
+        balance = await self.private_ai.credits.balance(
+            user.id
+        )
+
+        await update.message.reply_text(
+            "🎁 *Daily Bonus Unlocked!*\n\n"
+            f"You received *{amount} credits*.\n"
+            f"💳 Current balance: *{balance}*",
+            parse_mode="Markdown"
+        )
+
+        async def private_ai_message(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle ordinary private text for Private AI."""
+
+        if not PRIVATE_AI_ENABLED or self.private_ai is None:
+            return
+
+        if (
+            not update.message
+            or not update.effective_user
+            or update.effective_chat.type != "private"
+        ):
+            return
+
+        user = update.effective_user
+        user_id = user.id
+        user_text = update.message.text or ""
+
+        if not user_text.strip():
+            return
+
+        # Never interfere with clone-bot token setup.
+        if await db.is_clone_pending(user_id):
+            return
+
+        await db.add_user(
+            user_id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        await self.private_ai.prepare_user(user_id)
+
+        history = self.ai_histories.get(
+            user_id,
+            []
+        )[-12:]
+
+        try:
+            result = await self.private_ai.respond(
+                user_id,
+                user_text,
+                history=history
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Private AI error for user %s: %s",
+                user_id,
+                exc
+            )
+
+            await update.message.reply_text(
+                "⚠️ AI service is temporarily unavailable. "
+                "Please try again in a moment."
+            )
+            return
+
+        if result.safety_category == "normal":
+            history = list(history)
+
+            history.extend([
+                ChatMessage(
+                    role="user",
+                    content=user_text
+                ),
+                ChatMessage(
+                    role="model",
+                    content=result.text
+                )
+            ])
+
+            self.ai_histories[user_id] = history[-12:]
+
+        await update.message.reply_text(
+            result.text
+        )
+
+        try:
+            await self._archive_private_ai_turn(
+                user,
+                user_text,
+                result.text
+            )
+        except Exception as exc:
+            logger.warning(
+                "Private AI Activity GC archive failed "
+                "for %s: %s",
+                user_id,
+                exc
+    )
+
+        async def _archive_private_ai_turn(
+        self,
+        user,
+        user_text,
+        ai_text
+    ):
+        """Archive a user/AI turn in one forum topic per user."""
+
+        if not AI_ACTIVITY_GROUP_ID:
+            return
+
+        existing = await db.get_ai_activity(
+            user.id
+        )
+
+        if existing:
+            topic_id = int(
+                existing["topic_id"]
+            )
+        else:
+            username = (
+                f"@{user.username}"
+                if user.username
+                else "no_username"
+            )
+
+            topic_name = (
+                f"{user.first_name or 'User'} "
+                f"{username} | {user.id}"
+            )[:128]
+
+            topic = (
+                await self.application.bot.create_forum_topic(
+                    chat_id=AI_ACTIVITY_GROUP_ID,
+                    name=topic_name
+                )
+            )
+
+            topic_id = topic.message_thread_id
+
+            await db.save_ai_activity(
+                user.id,
+                AI_ACTIVITY_GROUP_ID,
+                topic_id,
+                topic_name
+            )
+
+        user_header = (
+            "👤 *USER MESSAGE*\n"
+            f"Name: {user.first_name or 'Unknown'}\n"
+            f"Username: "
+            f"@{user.username if user.username else 'none'}\n"
+            f"ID: `{user.id}`\n\n"
+            f"{user_text}"
+        )
+
+        await self.application.bot.send_message(
+            chat_id=AI_ACTIVITY_GROUP_ID,
+            message_thread_id=topic_id,
+            text=user_header,
+            parse_mode="Markdown"
+        )
+
+        await self.application.bot.send_message(
+            chat_id=AI_ACTIVITY_GROUP_ID,
+            message_thread_id=topic_id,
+            text=f"🤖 *AI REPLY*\n\n{ai_text}",
+            parse_mode="Markdown"
+        )
 
     async def forward_user_message_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Forward any user message from private chat to admin group."""
