@@ -683,6 +683,69 @@ class Database:
                 WHERE user_id = $1
             """, user_id)
 
+    async def claim_ai_daily_bonus(
+    self,
+    user_id: int,
+    amount: int
+) -> Optional[Dict]:
+    """
+    Atomically claim the daily AI bonus.
+
+    Returns updated credit information when successful.
+    Returns None if the 24-hour cooldown has not expired.
+    """
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    if amount <= 0:
+        raise ValueError("Bonus amount must be greater than zero")
+
+    async with self.pool.acquire() as conn:
+        async with conn.transaction():
+
+            row = await conn.fetchrow("""
+                UPDATE ai_credits
+                SET
+                    balance = balance + $2,
+                    total_earned = total_earned + $2,
+                    last_bonus_at = NOW(),
+                    updated_at = NOW()
+                WHERE user_id = $1
+                  AND (
+                      last_bonus_at IS NULL
+                      OR last_bonus_at <= NOW() - INTERVAL '24 hours'
+                  )
+                RETURNING
+                    user_id,
+                    balance,
+                    total_earned,
+                    total_used,
+                    last_bonus_at
+            """, user_id, amount)
+
+            if not row:
+                return None
+
+            await conn.execute("""
+                INSERT INTO ai_credit_transactions (
+                    user_id,
+                    amount,
+                    transaction_type,
+                    balance_after,
+                    metadata
+                )
+                VALUES ($1, $2, 'DAILY_BONUS', $3, $4::jsonb)
+            """,
+                user_id,
+                amount,
+                row["balance"],
+                json.dumps({
+                    "source": "daily_bonus"
+                })
+            )
+
+            return dict(row)
+
     async def add_ai_credits(
         self,
         user_id: int,
