@@ -641,7 +641,7 @@ class Database:
                         balance,
                         total_earned
                     )
-                    VALUES ($1, $2, $2)
+                    VALUES ($1, $2::BIGINT, $2::BIGINT)
                     ON CONFLICT (user_id) DO NOTHING
                     RETURNING user_id, balance
                 """, user_id, initial_credits)
