@@ -35,6 +35,7 @@ from telegram import (
     Message
 )
 from telegram.helpers import escape_markdown
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application, 
     ApplicationBuilder,
@@ -3943,6 +3944,20 @@ Let's connect with Aman Directly, privately and securely!
             parse_mode="Markdown"
         )
 
+    async def _private_ai_typing_loop(
+    self,
+    chat_id: int
+):
+    """Keep Telegram's typing indicator active while AI is generating."""
+
+    while True:
+        await self.application.bot.send_chat_action(
+            chat_id=chat_id,
+            action=ChatAction.TYPING
+        )
+
+        await asyncio.sleep(4)
+
     async def private_ai_message(
         self,
         update: Update,
@@ -3985,14 +4000,27 @@ Let's connect with Aman Directly, privately and securely!
             []
         )[-12:]
 
-        try:
-            result = await self.private_ai.respond(
-                user_id,
-                user_text,
-                history=history
-            )
+        typing_task = asyncio.create_task(
+    self._private_ai_typing_loop(
+        update.effective_chat.id
+    )
+)
 
-        except Exception as exc:
+try:
+    result = await self.private_ai.respond(
+        user_id,
+        user_text,
+        history=history
+    )
+
+except Exception as exc:
+
+    typing_task.cancel()
+
+    try:
+        await typing_task
+    except asyncio.CancelledError:
+        pass
             logger.exception(
                 "Private AI error for user %s: %s",
                 user_id,
@@ -4002,6 +4030,7 @@ Let's connect with Aman Directly, privately and securely!
             await update.message.reply_text(
                 "⚠️ AI service is temporarily unavailable. "
                 "Please try again in a moment."
+                reply_to_message_id=update.message.message_id
             )
             return
 
@@ -4023,6 +4052,7 @@ Let's connect with Aman Directly, privately and securely!
 
         await update.message.reply_text(
             result.text
+            reply_to_message_id=update.message.message_id
         )
 
         try:
