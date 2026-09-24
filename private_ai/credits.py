@@ -290,9 +290,9 @@ class CreditService:
         if billing and not billing[
             "session_active"
         ]:
-            return await self.start_session(
+            return await self.get_active_session(
                 user_id
-            )
+            ) or session
 
         await self.touch_session(
             int(session["id"])
