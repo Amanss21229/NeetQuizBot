@@ -4014,13 +4014,13 @@ Let's connect with Aman Directly, privately and securely!
             )
 
         except Exception as exc:
-            typing_task.cancel()
-
-        try:
-             await typing_task
-        except asyncio.CancelledError:
-            pass
-
+            typing_task.cancel() 
+            
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+                
             logger.exception(
                 "Private AI error for user %s: %s",
                 user_id,
@@ -4050,7 +4050,7 @@ Let's connect with Aman Directly, privately and securely!
 
             self.ai_histories[user_id] = history[-12:]
             
-        typing_task.cancel()
+            typing_task.cancel()
 
         try:
             await typing_task
@@ -4058,7 +4058,7 @@ Let's connect with Aman Directly, privately and securely!
             pass
 
         await update.message.reply_text(
-            result.text
+            result.text,
             reply_to_message_id=update.message.message_id
         )
 
