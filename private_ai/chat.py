@@ -68,7 +68,7 @@ class PrivateAI:
 
         messages = list(history) + [ChatMessage(role="user", content=user_text)]
         text = await self.provider.generate(messages, system_prompt)
-        return ChatResult(text=text, credits_used=1, safety_category="normal")
+        return ChatResult(text=text, credits_used=0, safety_category="normal")
 
     @staticmethod
     def _safe_response(category: str) -> str:
