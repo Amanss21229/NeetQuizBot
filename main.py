@@ -667,6 +667,14 @@ Hello! To use this bot, you need to join our official groups/channels first.
             CommandHandler("credits", self.private_ai_credits)
         )
 
+        self.application.add_handler(
+            CommandHandler("memory", self.private_ai_memory)
+        )
+
+        self.application.add_handler(
+            CommandHandler("forgetmemory", self.private_ai_forget_memory)
+        )
+
         # Private AI text handler runs after clone-token interception
         # and before the existing admin-forwarding handler.
         if PRIVATE_AI_ENABLED:
@@ -3954,6 +3962,165 @@ Let's connect with Aman Directly, privately and securely!
             parse_mode="Markdown"
         )
 
+    async def private_ai_memory(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Show the user's saved Private AI memory."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        await self.private_ai.prepare_user(
+            user.id
+        )
+
+        memory_text = (
+            await self.private_ai.memory.get_memory_text(
+                user.id
+            )
+        )
+
+        await update.message.reply_text(
+            "🧠 *Your AI Memory*\n\n"
+            f"{memory_text}\n\n"
+            "You can remove saved information with:\n"
+            "`/forgetmemory name`\n"
+            "`/forgetmemory class`\n"
+            "`/forgetmemory target`\n"
+            "`/forgetmemory goals`\n"
+            "`/forgetmemory preferences`\n"
+            "`/forgetmemory facts`\n\n"
+            "To clear all AI memory:\n"
+            "`/forgetmemory all`",
+            parse_mode="Markdown"
+        )  
+
+    async def private_ai_forget_memory(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Allow a user to remove their saved AI memory."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+
+        await self.private_ai.prepare_user(
+            user.id
+        )
+
+        if not context.args:
+
+            await update.message.reply_text(
+                "🧠 *Memory Controls*\n\n"
+                "Remove one memory type:\n"
+                "`/forgetmemory name`\n"
+                "`/forgetmemory class`\n"
+                "`/forgetmemory target`\n"
+                "`/forgetmemory goals`\n"
+                "`/forgetmemory preferences`\n"
+                "`/forgetmemory facts`\n\n"
+                "Clear everything:\n"
+                "`/forgetmemory all`",
+                parse_mode="Markdown"
+            )
+
+            return
+
+        field = (
+            context.args[0]
+            .lower()
+            .strip()
+        )
+
+        if field == "all":
+
+            await self.private_ai.memory.forget_all(
+                user.id
+            )
+
+            # Clear in-memory short-term conversation too.
+            self.ai_histories.pop(
+                user.id,
+                None
+            )
+
+            await update.message.reply_text(
+                "🗑️ Your saved AI personalization "
+                "has been cleared."
+            )
+
+            return
+
+        removed = (
+            await self.private_ai.memory.forget_field(
+                user.id,
+                field
+            )
+        )
+
+        if not removed:
+
+            await update.message.reply_text(
+                "❌ Unknown memory type.\n\n"
+                "Use one of:\n"
+                "`name`, `class`, `target`, `goals`, "
+                "`preferences`, `facts`, or `all`.",
+                parse_mode="Markdown"
+            )
+
+            return
+
+        # Prevent stale short-term context from immediately
+        # reintroducing the forgotten information.
+        self.ai_histories.pop(
+            user.id,
+            None
+        )
+
+        await update.message.reply_text(
+            f"🗑️ `{field}` memory cleared.",
+            parse_mode="Markdown"
+        )    
+
     async def _private_ai_typing_loop(
         self,
         chat_id: int
@@ -4164,6 +4331,39 @@ Let's connect with Aman Directly, privately and securely!
             self.ai_histories[
                 user_id
             ] = history[-12:]
+
+        # ----------------------------------------------------
+        # LONG-TERM MEMORY LEARNING
+        # ----------------------------------------------------
+
+        if result.safety_category == "normal":
+
+            try:
+
+                learned = (
+                    await self.private_ai.memory.learn_from_message(
+                        user_id,
+                        user_text
+                    )
+                )
+
+                if learned:
+
+                    logger.info(
+                        "Private AI memory updated for user %s: %s",
+                        user_id,
+                        list(learned.keys())
+                    )
+
+            except Exception as exc:
+
+                # Memory failure must NEVER break normal AI chat.
+                logger.warning(
+                    "Private AI memory learning failed "
+                    "for user %s: %s",
+                    user_id,
+                    exc
+                )        
 
         # ----------------------------------------------------
         # MARK SESSION ACTIVITY
