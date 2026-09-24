@@ -3866,7 +3866,7 @@ Let's connect with Aman Directly, privately and securely!
             "You can also simply say:\n"
             "“Remind me in 20 minutes to revise Biology”\n\n"
             "🔒 *Privacy notice:* Private-AI messages and replies. "
-            "🌸 Your messages stay completely private "  
+            "🌸 Your messages stay completely private "
             "Only I can read them — no one else, ever.🤍\n\n"
             "Just send me a message to start.",
             parse_mode="Markdown"
