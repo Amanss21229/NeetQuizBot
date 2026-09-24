@@ -560,7 +560,17 @@ Hello! To use this bot, you need to join our official groups/channels first.
             name="daily_wrong_quiz_summary"
         )
 
-    
+        # ----------------------------------------------------
+        # PRIVATE AI SESSION CLEANUP
+        # ----------------------------------------------------
+
+        self.application.job_queue.run_repeating(
+            callback=self._cleanup_private_ai_sessions,
+            interval=60,
+            first=60,
+            name="private_ai_session_cleanup"
+        )
+
     def _register_handlers(self):
         """Register all bot handlers"""
         # Command handlers
