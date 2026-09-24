@@ -112,6 +112,44 @@ class CreditService:
             },
         )
 
+    async def admin_adjust(
+        self,
+        user_id: int,
+        amount: int,
+        admin_id: int
+    ) -> Optional[dict]:
+        """
+        Add or deduct credits through an admin action.
+        Positive amount = add.
+        Negative amount = deduct.
+        """
+
+        if amount == 0:
+            raise ValueError(
+                "Adjustment cannot be zero"
+            )
+
+        if amount > 0:
+            return await self.db.add_ai_credits(
+                user_id=user_id,
+                amount=amount,
+                transaction_type="ADMIN_ADJUSTMENT",
+                admin_id=admin_id,
+                metadata={
+                    "source": "admin_credit_command"
+                }
+            )
+
+        return await self.db.deduct_ai_credits(
+            user_id=user_id,
+            amount=abs(amount),
+            transaction_type="ADMIN_ADJUSTMENT",
+            admin_id=admin_id,
+            metadata={
+                "source": "admin_credit_command"
+            }
+        )    
+
     # ========================================================
     # DAILY BONUS
     # ========================================================
