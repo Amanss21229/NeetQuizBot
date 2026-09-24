@@ -964,25 +964,26 @@ class Database:
 
     async def bill_ai_session(
         self,
-        session_id: int
+        session_id: int,
+        inactivity_minutes: int = 5
     ) -> Optional[Dict]:
         """
         Atomically bill completed active chat minutes.
 
-        One credit = one completed active chat minute.
+        One credit = one active chat minute.
 
-        Returns:
-            {
-                "billed_minutes": int,
-                "credits_consumed": int,
-                "balance": int,
-                "session_active": bool
-            }
+        Billing is capped at the inactivity window so that a user
+        cannot accumulate charges while they are away from the chat.
 
-        Returns None if the session does not exist or is inactive.
+        Returns billing information.
         """
         if not self.pool:
             raise RuntimeError("Database pool not initialized")
+
+        if inactivity_minutes <= 0:
+            raise ValueError(
+                "inactivity_minutes must be greater than zero"
+            )
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
@@ -991,6 +992,8 @@ class Database:
                     SELECT
                         id,
                         user_id,
+                        started_at,
+                        last_activity_at,
                         last_billed_at,
                         credits_consumed,
                         active
@@ -1002,37 +1005,52 @@ class Database:
                 if not session or not session["active"]:
                     return None
 
-                # Calculate only fully completed minutes.
+                # Calculate elapsed time since the last billing point.
                 elapsed_seconds = await conn.fetchval("""
                     SELECT GREATEST(
                         0,
-                        FLOOR(
-                            EXTRACT(
-                                EPOCH FROM (
-                                    NOW() - $1::timestamp
-                                )
-                            ) / 60
+                        EXTRACT(
+                            EPOCH FROM (
+                                NOW() - $1::timestamp
+                            )
                         )
                     )
                 """, session["last_billed_at"])
 
-                completed_minutes = int(elapsed_seconds or 0)
+                elapsed_seconds = float(
+                    elapsed_seconds or 0
+                )
 
+                # Never bill beyond the configured inactivity window.
+                max_billable_seconds = inactivity_minutes * 60
+
+                billable_seconds = min(
+                    elapsed_seconds,
+                    max_billable_seconds
+                )
+
+                completed_minutes = int(
+                    billable_seconds // 60
+                )
+
+                # Nothing to bill yet.
                 if completed_minutes <= 0:
+                    balance = await conn.fetchval("""
+                        SELECT balance
+                        FROM ai_credits
+                        WHERE user_id = $1
+                    """, session["user_id"])
+
                     return {
                         "billed_minutes": 0,
                         "credits_consumed": int(
                             session["credits_consumed"]
                         ),
-                        "balance": await conn.fetchval("""
-                            SELECT balance
-                            FROM ai_credits
-                            WHERE user_id = $1
-                        """, session["user_id"]),
+                        "balance": int(balance or 0),
                         "session_active": True
                     }
 
-                # Check available credits.
+                # Lock the user's credit row.
                 balance = await conn.fetchval("""
                     SELECT balance
                     FROM ai_credits
@@ -1042,20 +1060,25 @@ class Database:
 
                 balance = int(balance or 0)
 
-                # We can only bill minutes for which credits exist.
+                # We cannot spend more credits than available.
                 billable_minutes = min(
                     completed_minutes,
                     balance
                 )
 
                 if billable_minutes > 0:
-                    new_balance = balance - billable_minutes
 
+                    new_balance = (
+                        balance - billable_minutes
+                    )
+
+                    # Deduct credits.
                     await conn.execute("""
                         UPDATE ai_credits
                         SET
                             balance = $2,
-                            total_used = total_used + $3,
+                            total_used =
+                                total_used + $3,
                             updated_at = NOW()
                         WHERE user_id = $1
                     """,
@@ -1064,6 +1087,7 @@ class Database:
                         billable_minutes
                     )
 
+                    # Audit transaction.
                     await conn.execute("""
                         INSERT INTO ai_credit_transactions (
                             user_id,
@@ -1090,44 +1114,47 @@ class Database:
                         })
                     )
 
+                    # Advance billing timestamp only by the amount
+                    # actually billed.
                     await conn.execute("""
                         UPDATE ai_sessions
                         SET
                             last_billed_at =
                                 last_billed_at
-                                + ($2 * INTERVAL '1 minute'),
+                                + (
+                                    $2 * INTERVAL '1 minute'
+                                ),
                             credits_consumed =
-                                credits_consumed + $2,
-                            last_activity_at = NOW()
+                                credits_consumed + $2
                         WHERE id = $1
                     """,
                         session_id,
                         billable_minutes
                     )
 
-                # If there are not enough credits to cover all completed
-                # minutes, the session must stop so it cannot continue
-                # accumulating unpaid usage.
+                # If the user has no credits left, immediately close
+                # the session.
                 session_active = (
-                    billable_minutes == completed_minutes
-                    and balance > billable_minutes
+                    balance - billable_minutes > 0
                 )
 
                 if not session_active:
                     await conn.execute("""
                         UPDATE ai_sessions
                         SET
-                            active = FALSE,
-                            updated_at = NOW()
+                            active = FALSE
                         WHERE id = $1
                     """, session_id)
 
                 return {
                     "billed_minutes": billable_minutes,
-                    "credits_consumed": int(
-                        session["credits_consumed"]
-                    ) + billable_minutes,
-                    "balance": balance - billable_minutes,
+                    "credits_consumed": (
+                        int(session["credits_consumed"])
+                        + billable_minutes
+                    ),
+                    "balance": (
+                        balance - billable_minutes
+                    ),
                     "session_active": session_active
                 }
 
@@ -1143,8 +1170,7 @@ class Database:
             result = await conn.execute("""
                 UPDATE ai_sessions
                 SET
-                    active = FALSE,
-                    last_activity_at = NOW()
+                    active = FALSE,    
                 WHERE id = $1
                   AND active = TRUE
             """, session_id)
