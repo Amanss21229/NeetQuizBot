@@ -594,6 +594,85 @@ class Database:
                 *values
             )
 
+    async def clear_ai_profile_memory(
+        self,
+        user_id: int
+    ) -> None:
+        """
+        Clear all non-sensitive Private AI personalization
+        controlled by the memory system.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        await self.create_ai_profile(
+            user_id
+        )
+
+        async with self.pool.acquire() as conn:
+
+            await conn.execute("""
+                UPDATE ai_profiles
+                SET
+                    preferred_name = NULL,
+                    study_class = NULL,
+                    exam_target = NULL,
+                    goals = NULL,
+                    preferences = NULL,
+                    memory_summary = NULL,
+                    updated_at = NOW()
+                WHERE user_id = $1
+            """, user_id)
+
+
+    async def clear_ai_profile_field(
+        self,
+        user_id: int,
+        field: str
+    ) -> None:
+        """
+        Clear one allowed Private AI memory field.
+        """
+
+        allowed_fields = {
+            "preferred_name",
+            "study_class",
+            "exam_target",
+            "goals",
+            "preferences",
+            "memory_summary",
+        }
+
+        if field not in allowed_fields:
+            raise ValueError(
+                "Unsupported AI memory field"
+            )
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        await self.create_ai_profile(
+            user_id
+        )
+
+        async with self.pool.acquire() as conn:
+
+            await conn.execute(
+                f"""
+                UPDATE ai_profiles
+                SET
+                    {field} = NULL,
+                    updated_at = NOW()
+                WHERE user_id = $1
+                """,
+                user_id
+            )    
+
         # ============================================================
     # PRIVATE AI CREDIT METHODS
     # ============================================================
