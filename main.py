@@ -576,13 +576,13 @@ Hello! To use this bot, you need to join our official groups/channels first.
        # PRIVATE AI REMINDER DISPATCHER
        # ----------------------------------------------------
 
-    if PRIVATE_AI_ENABLED:
-        self.application.job_queue.run_repeating(
-            callback=self._dispatch_private_ai_reminders,
-            interval=30,
-            first=10,
-            name="private_ai_reminder_dispatcher"
-        )
+        if PRIVATE_AI_ENABLED:
+            self.application.job_queue.run_repeating(
+                callback=self._dispatch_private_ai_reminders,
+                interval=30,
+                first=10,
+                name="private_ai_reminder_dispatcher"
+            )
 
     def _register_handlers(self):
         """Register all bot handlers"""
