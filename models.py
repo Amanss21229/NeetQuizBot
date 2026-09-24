@@ -1216,7 +1216,7 @@ class Database:
             result = await conn.execute("""
                 UPDATE ai_sessions
                 SET
-                    active = FALSE,    
+                    active = FALSE
                 WHERE id = $1
                   AND active = TRUE
             """, session_id)
