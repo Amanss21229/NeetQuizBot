@@ -1221,19 +1221,12 @@ class Database:
                     elapsed_active_seconds or 0
                 )
 
-                # Safety cap: never bill more than the configured
-                # inactivity window in one billing operation.
-                max_billable_seconds = (
-                    inactivity_minutes * 60
-                )
-
-                billable_seconds = min(
-                    elapsed_active_seconds,
-                    max_billable_seconds
-                )
-
+                # Convert only completed active time into credits.
+                #
+                # We already stop at last_activity_at above,
+                # therefore idle time is never included.
                 completed_minutes = int(
-                    billable_seconds // 60
+                    elapsed_active_seconds // 60
                 )
 
                 # Nothing to bill yet.
