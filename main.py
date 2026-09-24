@@ -700,6 +700,10 @@ Hello! To use this bot, you need to join our official groups/channels first.
             CommandHandler("cancelreminder", self.private_ai_cancel_reminder)
         )
 
+         self.application.add_handler(
+             CommandHandler("done", self.private_ai_done_reminder)
+         )
+
         # Private AI text handler runs after clone-token interception
         # and before the existing admin-forwarding handler.
         if PRIVATE_AI_ENABLED:
@@ -4368,9 +4372,10 @@ Let's connect with Aman Directly, privately and securely!
             
             lines.append("")
             
-        lines.append(
-            "Cancel: /cancelreminder ID"
-        )
+            lines.append(
+                "✅ Complete: /done ID\n"
+                "🗑️ Cancel: /cancelreminder ID"
+            )
         
         await update.message.reply_text(
             "\n".join(lines)
@@ -4439,6 +4444,64 @@ Let's connect with Aman Directly, privately and securely!
         await update.message.reply_text(
             f"🗑️ Reminder #{task_id} cancelled."
         )
+
+    async def private_ai_done_reminder(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Mark one of the user's reminders as completed."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        if not context.args:
+            await update.message.reply_text(
+                "Usage:\n"
+                "/done 12\n\n"
+                "Use /tasks to see reminder IDs."
+            )
+            return
+
+        try:
+            task_id = int(
+                context.args[0]
+            )
+
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid reminder ID.\n"
+                "Use /tasks to see your reminder IDs."
+            )
+            return
+
+        completed = (
+            await self.private_ai.tasks.cancel(
+                user.id,
+                task_id
+            )
+        )
+
+        if not completed:
+            await update.message.reply_text(
+                "❌ Active reminder not found."
+            )
+            return
+
+        await update.message.reply_text(
+            f"✅ Reminder #{task_id} marked as done."
+        )    
 
     async def _dispatch_private_ai_reminders(
         self,
