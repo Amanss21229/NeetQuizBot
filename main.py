@@ -700,9 +700,9 @@ Hello! To use this bot, you need to join our official groups/channels first.
             CommandHandler("cancelreminder", self.private_ai_cancel_reminder)
         )
 
-         self.application.add_handler(
-             CommandHandler("done", self.private_ai_done_reminder)
-         )
+        self.application.add_handler(
+            CommandHandler("done", self.private_ai_done_reminder)
+        )
 
         # Private AI text handler runs after clone-token interception
         # and before the existing admin-forwarding handler.
