@@ -943,6 +943,35 @@ class Database:
 
             return dict(row) if row else None
 
+    async def get_all_active_ai_sessions(
+        self
+    ) -> List[Dict]:
+        """Get all currently active AI sessions."""
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    id,
+                    user_id,
+                    started_at,
+                    last_activity_at,
+                    last_billed_at,
+                    credits_consumed,
+                    active
+                FROM ai_sessions
+                WHERE active = TRUE
+                ORDER BY id
+            """)
+
+            return [
+                dict(row)
+                for row in rows
+            ]    
+
     async def touch_ai_session(
         self,
         session_id: int
