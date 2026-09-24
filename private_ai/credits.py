@@ -304,10 +304,11 @@ class CreditService:
     ) -> dict:
 
         """
-        Get or create an active session.
+        Get/create the user's active AI session.
 
-        Also bills any completed minutes from the previous
-        active period before continuing.
+        A session that has already crossed the inactivity
+        window is closed before a new message starts.
+        Idle time is never carried into a new session.
         """
 
         session = await self.get_active_session(
@@ -319,18 +320,57 @@ class CreditService:
                 user_id
             )
 
+        last_activity = session.get(
+            "last_activity_at"
+        )
+
+        if last_activity is not None:
+
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(
+                    tzinfo=timezone.utc
+                )
+
+            now = datetime.now(
+                timezone.utc
+            )
+
+            inactive_seconds = (
+                now - last_activity
+            ).total_seconds()
+
+            if inactive_seconds >= (
+                AI_SESSION_INACTIVITY_MINUTES * 60
+            ):
+
+                # Bill only activity that happened before
+                # the user became inactive.
+                await self.bill_session(
+                    int(session["id"])
+                )
+
+                await self.close_session(
+                    int(session["id"])
+                )
+
+                return await self.start_session(
+                    user_id
+                )
+
+        # Bill completed active minutes accumulated so far.
         billing = await self.bill_session(
             int(session["id"])
         )
 
-        # Session may have been closed because credits
-        # became exhausted.
-        if billing and not billing[
-            "session_active"
-        ]:
-            return await self.get_active_session(
-                user_id
-            ) or session
+        if (
+            billing
+            and not billing.get(
+                "session_active",
+                True
+            )
+        ):
+            # Credits were exhausted while billing.
+            return session
 
         await self.touch_session(
             int(session["id"])
