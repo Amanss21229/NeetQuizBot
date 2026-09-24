@@ -1466,6 +1466,43 @@ class Database:
                     updated_at = NOW()
                 WHERE id = $1
             """, task_id, next_run_at, active)
+
+    async def get_due_ai_tasks(
+        self,
+        now_utc: datetime,
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        Get active reminders whose next execution time
+        has arrived.
+        
+        ai_tasks.next_run_at is stored as naive UTC.
+        """
+        
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+            
+        async with self.pool.acquire() as conn:
+            
+            rows = await conn.fetch("""
+                SELECT *
+                FROM ai_tasks
+                WHERE active = TRUE
+                AND next_run_at IS NOT NULL
+                AND next_run_at <= $1
+                ORDER BY next_run_at ASC
+                LIMIT $2
+            """,
+                now_utc,
+                limit
+            )
+            
+            return [
+                dict(row)
+                for row in rows
+            ]    
     
     async def add_group(self, group_id: int, title: str, group_type: str, username: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update group in database"""
