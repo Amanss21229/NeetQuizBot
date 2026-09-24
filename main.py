@@ -3958,16 +3958,19 @@ Let's connect with Aman Directly, privately and securely!
         self,
         chat_id: int
     ):
-        """Keep Telegram's typing indicator active while AI is generating."""
+        """Keep Telegram typing indicator active while AI is generating."""
 
-        while True:
-            await self.application.bot.send_chat_action(
-                chat_id=chat_id,
-                action=ChatAction.TYPING
-            )
-            
-            await asyncio.sleep(4)
-     except asyncio.CancelledError:
+        try:
+            while True:
+
+                await self.application.bot.send_chat_action(
+                    chat_id=chat_id,
+                    action=ChatAction.TYPING
+                )
+
+                await asyncio.sleep(4)
+
+        except asyncio.CancelledError:
             return
 
     async def private_ai_message(
