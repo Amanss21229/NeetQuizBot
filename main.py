@@ -604,6 +604,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("pbroadcast", self.pbroadcast_command))
         self.application.add_handler(CommandHandler("gbroadcast", self.gbroadcast_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
+        self.application.add_handler(CommandHandler("credit", self.private_ai_admin_credit))
         self.application.add_handler(CommandHandler("promote", self.promote_command))
         self.application.add_handler(CommandHandler("remove", self.remove_command))
         self.application.add_handler(CommandHandler("adminlist", self.adminlist_command))
@@ -3994,6 +3995,229 @@ Let's connect with Aman Directly, privately and securely!
             f"💳 Current balance: *{balance}*",
             parse_mode="Markdown"
         )
+
+    async def private_ai_admin_credit(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Admin-only AI credit adjustment command."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        admin = update.effective_user
+
+        if not admin or not update.message:
+            return
+
+        # Admin-only security gate.
+        if not await db.is_admin(admin.id):
+            await update.message.reply_text(
+                "❌ This command is only available to bot admins."
+            )
+            return
+
+        if len(context.args) != 2:
+            await update.message.reply_text(
+                "💳 Credit command\n\n"
+                "Specific user:\n"
+                "/credit 50 123456789\n\n"
+                "Deduct:\n"
+                "/credit -10 123456789\n\n"
+                "All users:\n"
+                "/credit 10 all"
+            )
+            return
+
+        try:
+            amount = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Credit amount must be a number."
+            )
+            return
+
+        if amount == 0:
+            await update.message.reply_text(
+                "❌ Credit amount cannot be 0."
+            )
+            return
+
+        target = context.args[1].strip().lower()
+
+        # ----------------------------------------------------
+        # ALL USERS
+        # ----------------------------------------------------
+
+        if target == "all":
+
+            # For safety, mass deduction is not allowed.
+            if amount < 0:
+                await update.message.reply_text(
+                    "❌ Bulk credit deduction is disabled.\n"
+                    "Use a specific user ID for deductions."
+                )
+                return
+
+            users = await db.get_all_users()
+
+            success = 0
+            failed = 0
+
+            status = await update.message.reply_text(
+                f"⏳ Adding {amount} AI credits "
+                f"to {len(users)} users..."
+            )
+
+            for target_user in users:
+
+                try:
+                    user_id = int(
+                        target_user["id"]
+                    )
+
+                    result = (
+                        await self.private_ai.credits.admin_adjust(
+                            user_id=user_id,
+                            amount=amount,
+                            admin_id=admin.id
+                        )
+                    )
+
+                    if result:
+                        success += 1
+                    else:
+                        failed += 1
+
+                except Exception as exc:
+                    failed += 1
+
+                    logger.warning(
+                        "Bulk AI credit adjustment failed "
+                        "for user %s: %s",
+                        target_user.get("id"),
+                        exc
+                    )
+
+            await status.edit_text(
+                "✅ Bulk AI credit operation completed.\n\n"
+                f"💳 Added: {amount} credits each\n"
+                f"👥 Updated: {success}\n"
+                f"⚠️ Failed: {failed}"
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # SPECIFIC USER
+        # ----------------------------------------------------
+
+        try:
+            target_user_id = int(target)
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid user ID.\n\n"
+                "Example:\n"
+                "/credit 50 123456789"
+            )
+            return
+
+        # Ensure target actually exists in our users table.
+        users = await db.get_all_users()
+
+        target_exists = any(
+            int(row["id"]) == target_user_id
+            for row in users
+        )
+
+        if not target_exists:
+            await update.message.reply_text(
+                "❌ User not found in bot database."
+            )
+            return
+
+        result = (
+            await self.private_ai.credits.admin_adjust(
+                user_id=target_user_id,
+                amount=amount,
+                admin_id=admin.id
+            )
+        )
+
+        if result is None:
+
+            if amount < 0:
+                current_balance = (
+                    await self.private_ai.credits.balance(
+                        target_user_id
+                    )
+                )
+
+                await update.message.reply_text(
+                    "❌ Deduction failed.\n\n"
+                    f"User balance: {current_balance}\n"
+                    f"Requested deduction: {abs(amount)}\n\n"
+                    "Balance cannot go below 0."
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Credit adjustment failed."
+                )
+
+            return
+
+        new_balance = int(
+            result["balance"]
+        )
+
+        action = (
+            "added"
+            if amount > 0
+            else "deducted"
+        )
+
+        await update.message.reply_text(
+            "✅ AI credits updated.\n\n"
+            f"👤 User: {target_user_id}\n"
+            f"💳 Credits {action}: {abs(amount)}\n"
+            f"💰 New balance: {new_balance}"
+        )
+
+        # Notify target user.
+        try:
+
+            if amount > 0:
+                notification = (
+                    "🎁 AI Credits Added!\n\n"
+                    f"💳 +{amount} credits\n"
+                    f"💰 New balance: {new_balance}"
+                )
+
+            else:
+                notification = (
+                    "💳 AI Credit Adjustment\n\n"
+                    f"➖ {abs(amount)} credits\n"
+                    f"💰 New balance: {new_balance}"
+                )
+
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=notification
+            )
+
+        except Exception as exc:
+            logger.info(
+                "Could not notify credit user %s: %s",
+                target_user_id,
+                exc
+            )    
 
     async def private_ai_memory(
         self,
