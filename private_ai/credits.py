@@ -73,40 +73,43 @@ class CreditService:
         elapsed = now - last
         return elapsed.total_seconds() >= 24 * 60 * 60, last
 
-        async def claim_daily_bonus(
-    self,
-    user_id: int
-) -> tuple[Optional[int], Optional[datetime]]:
+    async def claim_daily_bonus(
+        self,
+        user_id: int
+    ) -> tuple[Optional[int], Optional[datetime]]:
+        """
+        Claim the daily AI credit bonus.
 
-    amount = await self.daily_bonus_amount()
+        Returns:
+            (bonus_amount, next_claim_time)
+        """
+        amount = await self.daily_bonus_amount()
 
-    result = await self.db.claim_ai_daily_bonus(
-        user_id,
-        amount
-    )
-
-    if result is None:
-        last = await self.db.get_last_bonus_at(user_id)
-
-        if last is None:
-            return None, None
-
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-
-        next_time = last + timedelta(hours=24)
-
-        return None, next_time
-
-    last_bonus = result["last_bonus_at"]
-
-    if last_bonus.tzinfo is None:
-        last_bonus = last_bonus.replace(
-            tzinfo=timezone.utc
+        result = await self.db.claim_ai_daily_bonus(
+            user_id,
+            amount
         )
 
-    next_time = last_bonus + timedelta(hours=24)
+        if result is None:
+            last = await self.db.get_last_bonus_at(user_id)
 
-    return amount, next_time
+            if last is None:
+                return None, None
 
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+
+            next_time = last + timedelta(hours=24)
+
+            return None, next_time
+
+        last_bonus = result["last_bonus_at"]
+
+        if last_bonus.tzinfo is None:
+            last_bonus = last_bonus.replace(tzinfo=timezone.utc)
+
+        next_time = last_bonus + timedelta(hours=24)
+
+        return amount, next_time
+        
 __all__ = ["CreditService", "BONUS_WEIGHTS"]
