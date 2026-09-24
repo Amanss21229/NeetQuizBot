@@ -58,14 +58,6 @@ class PrivateAI:
                 safety_category=safety.category,
             )
 
-        consumed = await self.credits.consume(user_id, 1, reason="AI_USAGE")
-        if consumed is None:
-            return ChatResult(
-                text="Your AI credits are finished. 🎓 Use /bonus when your next daily gift is available.",
-                credits_used=0,
-                safety_category="no_credits",
-            )
-
         context = await self.memory.build_context(user_id)
         system_prompt = build_system_prompt(
             memory_context=context,
