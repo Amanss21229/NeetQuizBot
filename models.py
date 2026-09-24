@@ -1034,27 +1034,44 @@ class Database:
                 if not session or not session["active"]:
                     return None
 
-                # Calculate elapsed time since the last billing point.
-                elapsed_seconds = await conn.fetchval("""
+                # ------------------------------------------------
+                # Calculate ACTUAL ACTIVE time.
+                #
+                # Important:
+                # Do NOT bill time after the user's last activity.
+                # This prevents charging users while they are away.
+                # ------------------------------------------------
+
+                elapsed_active_seconds = await conn.fetchval("""
                     SELECT GREATEST(
                         0,
                         EXTRACT(
                             EPOCH FROM (
-                                NOW() - $1::timestamp
+                                LEAST(
+                                    NOW(),
+                                    $2::timestamp
+                                )
+                                - $1::timestamp
                             )
                         )
                     )
-                """, session["last_billed_at"])
-
-                elapsed_seconds = float(
-                    elapsed_seconds or 0
+                """,
+                    session["last_billed_at"],
+                    session["last_activity_at"]
                 )
 
-                # Never bill beyond the configured inactivity window.
-                max_billable_seconds = inactivity_minutes * 60
+                elapsed_active_seconds = float(
+                    elapsed_active_seconds or 0
+                )
+
+                # Safety cap: never bill more than the configured
+                # inactivity window in one billing operation.
+                max_billable_seconds = (
+                    inactivity_minutes * 60
+                )
 
                 billable_seconds = min(
-                    elapsed_seconds,
+                    elapsed_active_seconds,
                     max_billable_seconds
                 )
 
