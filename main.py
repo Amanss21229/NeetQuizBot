@@ -3861,9 +3861,13 @@ Let's connect with Aman Directly, privately and securely!
             f"{gift_message}\n"
             "🎁 Daily gift: /bonus\n"
             "💳 Balance: /credits\n\n"
-            "🔒 *Privacy notice:* Private-AI messages and replies "
-            "are archived in the bot's admin-only Activity GC "
-            "for operation and moderation.\n\n"
+            "⏰ Create reminder: /remind\n"
+            "📋 My reminders: /tasks\n\n"
+            "You can also simply say:\n"
+            "“Remind me in 20 minutes to revise Biology”\n\n"
+            "🔒 *Privacy notice:* Private-AI messages and replies. "
+            "🌸 Your messages stay completely private. "  
+            "Only I can read them — no one else, ever. 🤍\n\n"
             "Just send me a message to start.",
             parse_mode="Markdown"
         )
@@ -4584,6 +4588,78 @@ Let's connect with Aman Directly, privately and securely!
         await self.private_ai.prepare_user(
             user_id
         )
+
+        # ----------------------------------------------------
+        # NATURAL-LANGUAGE REMINDER
+        # ----------------------------------------------------
+
+        if re.match(
+            r"^\s*remind\s+me\b",
+            user_text,
+            flags=re.IGNORECASE
+        ):
+            
+            try:
+                
+                reminder = (
+                    await self.private_ai.tasks.parse_and_create(
+                        user_id=user_id,
+                        text=user_text,
+                        timezone_name="Asia/Kolkata",
+                    )
+                )
+                
+                if reminder:
+                    
+                    run_local = (
+                        self.private_ai.tasks.db_to_local(
+                            reminder["next_run_at"],
+                            reminder["timezone"]
+                        )
+                    )
+                    
+                    repeat_text = ""
+                    
+                    if reminder["schedule_type"] == "daily":
+                        repeat_text = "\n🔁 Repeats daily"
+                    
+                    elif reminder["schedule_type"] == "weekly":
+                        repeat_text = "\n🔁 Repeats weekly"
+                        
+                    await update.message.reply_text(
+                        "✅ Sure! I'll remind you.\n\n"
+                        f"📝 {reminder['task_text']}\n"
+                        f"⏰ {run_local.strftime('%d %b %Y, %I:%M %p')}"
+                        f"{repeat_text}\n\n"
+                        f"Reminder ID: #{reminder['task_id']}"
+                    )
+                    
+                    return
+                    
+                await update.message.reply_text(
+                    "I understood that you want a reminder, "
+                    "but I couldn't understand the time.\n\n"
+                    "Try something like:\n"
+                    "Remind me in 20 minutes to revise Biology\n"
+                    "Remind me tomorrow at 8 pm to study Physics"
+                )
+                
+                return
+            
+            except Exception as exc:
+                
+                logger.exception(
+                    "Natural reminder creation failed "
+                    "for user %s: %s",
+                    user_id,
+                    exc                
+                )
+                
+                await update.message.reply_text(
+                    "⚠️ I couldn't create that reminder right now."
+                )
+                
+                return
 
         # Check current balance before starting/generating.
         balance = await self.private_ai.credits.balance(
