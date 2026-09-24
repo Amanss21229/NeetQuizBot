@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta
 from typing import Optional
@@ -673,7 +674,16 @@ class TaskService:
             or {}
         )
 
-        # asyncpg may already decode JSONB.
+        # asyncpg normally returns JSON/JSONB as a string
+        # unless a custom codec has been configured.
+        if isinstance(schedule_data, str):
+            try:
+                schedule_data = json.loads(
+                    schedule_data
+                )
+            except (TypeError, ValueError):
+                schedule_data = {}
+
         if not isinstance(
             schedule_data,
             dict
