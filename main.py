@@ -3957,6 +3957,8 @@ Let's connect with Aman Directly, privately and securely!
             )
             
             await asyncio.sleep(4)
+     except asyncio.CancelledError:
+            return
 
     async def private_ai_message(
         self,
@@ -3965,12 +3967,16 @@ Let's connect with Aman Directly, privately and securely!
     ):
         """Handle ordinary private text for Private AI."""
 
-        if not PRIVATE_AI_ENABLED or self.private_ai is None:
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
             return
 
         if (
             not update.message
             or not update.effective_user
+            or not update.effective_chat
             or update.effective_chat.type != "private"
         ):
             return
@@ -3986,6 +3992,7 @@ Let's connect with Aman Directly, privately and securely!
         if await db.is_clone_pending(user_id):
             return
 
+        # Register/update normal bot user.
         await db.add_user(
             user_id,
             user.username,
@@ -3993,12 +4000,78 @@ Let's connect with Aman Directly, privately and securely!
             user.last_name
         )
 
-        await self.private_ai.prepare_user(user_id)
+        # Ensure AI profile + welcome credits exist.
+        await self.private_ai.prepare_user(
+            user_id
+        )
+
+        # Check current balance before starting/generating.
+        balance = await self.private_ai.credits.balance(
+            user_id
+        )
+
+        if balance <= 0:
+            await update.message.reply_text(
+                "💳 *Your AI credits are exhausted.*\n\n"
+                "🎁 Claim your daily bonus with /bonus\n"
+                "💳 Check your balance with /credits",
+                parse_mode="Markdown",
+                reply_to_message_id=update.message.message_id
+            )
+            return
+
+        # ----------------------------------------------------
+        # SESSION
+        # ----------------------------------------------------
+
+        session = await (
+            self.private_ai.credits.prepare_session(
+                user_id
+            )
+        )
+
+        if not session:
+            await update.message.reply_text(
+                "⚠️ I couldn't start your AI session. "
+                "Please try again.",
+                reply_to_message_id=update.message.message_id
+            )
+            return
+
+        session_id = int(
+            session["id"]
+        )
+
+        # Re-check balance after any previous-session billing.
+        balance = await self.private_ai.credits.balance(
+            user_id
+        )
+
+        if balance <= 0:
+            await self.private_ai.credits.close_session(
+                session_id
+            )
+
+            await update.message.reply_text(
+                "💳 *Your AI credits are exhausted.*\n\n"
+                "🎁 Claim your daily bonus with /bonus",
+                parse_mode="Markdown",
+                reply_to_message_id=update.message.message_id
+            )
+            return
+
+        # ----------------------------------------------------
+        # SHORT-TERM CHAT HISTORY
+        # ----------------------------------------------------
 
         history = self.ai_histories.get(
             user_id,
             []
         )[-12:]
+
+        # ----------------------------------------------------
+        # TYPING INDICATOR
+        # ----------------------------------------------------
 
         typing_task = asyncio.create_task(
             self._private_ai_typing_loop(
@@ -4007,20 +4080,32 @@ Let's connect with Aman Directly, privately and securely!
         )
 
         try:
+
             result = await self.private_ai.respond(
                 user_id,
                 user_text,
                 history=history
             )
 
-        except Exception as exc:
-            typing_task.cancel() 
-            
+        except asyncio.CancelledError:
+            typing_task.cancel()
+
             try:
                 await typing_task
             except asyncio.CancelledError:
                 pass
-                
+
+            raise
+
+        except Exception as exc:
+
+            typing_task.cancel()
+
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+
             logger.exception(
                 "Private AI error for user %s: %s",
                 user_id,
@@ -4033,8 +4118,23 @@ Let's connect with Aman Directly, privately and securely!
                 reply_to_message_id=update.message.message_id
             )
             return
-            
+
+        finally:
+
+            if not typing_task.done():
+                typing_task.cancel()
+
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+
+        # ----------------------------------------------------
+        # UPDATE SHORT-TERM HISTORY
+        # ----------------------------------------------------
+
         if result.safety_category == "normal":
+
             history = list(history)
 
             history.extend([
@@ -4048,34 +4148,54 @@ Let's connect with Aman Directly, privately and securely!
                 )
             ])
 
-            self.ai_histories[user_id] = history[-12:]
-            
-            typing_task.cancel()
+            self.ai_histories[
+                user_id
+            ] = history[-12:]
+
+        # ----------------------------------------------------
+        # MARK SESSION ACTIVITY
+        # ----------------------------------------------------
 
         try:
-            await typing_task
-        except asyncio.CancelledError:
-            pass
+            await self.private_ai.credits.touch_session(
+                session_id
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to touch AI session for %s: %s",
+                user_id,
+                exc
+            )
+
+        # ----------------------------------------------------
+        # REPLY
+        # ----------------------------------------------------
 
         await update.message.reply_text(
             result.text,
             reply_to_message_id=update.message.message_id
         )
 
+        # ----------------------------------------------------
+        # ACTIVITY GC ARCHIVE
+        # ----------------------------------------------------
+
         try:
+
             await self._archive_private_ai_turn(
                 user,
                 user_text,
                 result.text
             )
+
         except Exception as exc:
+
             logger.warning(
                 "Private AI Activity GC archive failed "
                 "for %s: %s",
                 user_id,
                 exc
             )
-
         
     async def _archive_private_ai_turn(
         self,
