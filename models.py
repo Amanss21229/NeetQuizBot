@@ -892,6 +892,84 @@ class Database:
 
                 return dict(row)
 
+    async def deduct_ai_credits(
+        self,
+        user_id: int,
+        amount: int,
+        transaction_type: str = "ADMIN_ADJUSTMENT",
+        admin_id: Optional[int] = None,
+        metadata: Optional[Dict] = None
+    ) -> Optional[Dict]:
+        """
+        Atomically deduct credits without allowing
+        the user's balance to become negative.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        if amount <= 0:
+            raise ValueError(
+                "Credit amount must be greater than zero"
+            )
+
+        metadata = metadata or {}
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+
+                row = await conn.fetchrow("""
+                    UPDATE ai_credits
+                    SET
+                        balance = balance - $2,
+                        total_used = total_used + $2,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                      AND balance >= $2
+                    RETURNING
+                        user_id,
+                        balance,
+                        total_earned,
+                        total_used,
+                        last_bonus_at
+                """,
+                    user_id,
+                    amount
+                )
+
+                if not row:
+                    return None
+
+                await conn.execute("""
+                    INSERT INTO ai_credit_transactions (
+                        user_id,
+                        amount,
+                        transaction_type,
+                        balance_after,
+                        admin_id,
+                        metadata
+                    )
+                    VALUES (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6::jsonb
+                    )
+                """,
+                    user_id,
+                    -amount,
+                    transaction_type,
+                    row["balance"],
+                    admin_id,
+                    json.dumps(metadata)
+                )
+
+                return dict(row)    
+
     async def consume_ai_credit(
         self,
         user_id: int,
