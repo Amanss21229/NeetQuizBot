@@ -875,6 +875,282 @@ class Database:
                 return dict(row)
 
         # ============================================================
+    # PRIVATE AI SESSION / MINUTE BILLING METHODS
+    # ============================================================
+
+    async def create_ai_session(
+        self,
+        user_id: int
+    ) -> Dict:
+        """Create a new active AI chat session for a user."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO ai_sessions (
+                    user_id,
+                    started_at,
+                    last_activity_at,
+                    last_billed_at,
+                    credits_consumed,
+                    active
+                )
+                VALUES (
+                    $1,
+                    NOW(),
+                    NOW(),
+                    NOW(),
+                    0,
+                    TRUE
+                )
+                RETURNING
+                    id,
+                    user_id,
+                    started_at,
+                    last_activity_at,
+                    last_billed_at,
+                    credits_consumed,
+                    active
+            """, user_id)
+
+            return dict(row)
+
+    async def get_active_ai_session(
+        self,
+        user_id: int
+    ) -> Optional[Dict]:
+        """Return the user's currently active AI session."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    id,
+                    user_id,
+                    started_at,
+                    last_activity_at,
+                    last_billed_at,
+                    credits_consumed,
+                    active
+                FROM ai_sessions
+                WHERE user_id = $1
+                  AND active = TRUE
+                ORDER BY id DESC
+                LIMIT 1
+            """, user_id)
+
+            return dict(row) if row else None
+
+    async def touch_ai_session(
+        self,
+        session_id: int
+    ) -> bool:
+        """Update the last activity timestamp of an active session."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE ai_sessions
+                SET
+                    last_activity_at = NOW()
+                WHERE id = $1
+                  AND active = TRUE
+            """, session_id)
+
+            return result.endswith("1")
+
+    async def bill_ai_session(
+        self,
+        session_id: int
+    ) -> Optional[Dict]:
+        """
+        Atomically bill completed active chat minutes.
+
+        One credit = one completed active chat minute.
+
+        Returns:
+            {
+                "billed_minutes": int,
+                "credits_consumed": int,
+                "balance": int,
+                "session_active": bool
+            }
+
+        Returns None if the session does not exist or is inactive.
+        """
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+
+                session = await conn.fetchrow("""
+                    SELECT
+                        id,
+                        user_id,
+                        last_billed_at,
+                        credits_consumed,
+                        active
+                    FROM ai_sessions
+                    WHERE id = $1
+                    FOR UPDATE
+                """, session_id)
+
+                if not session or not session["active"]:
+                    return None
+
+                # Calculate only fully completed minutes.
+                elapsed_seconds = await conn.fetchval("""
+                    SELECT GREATEST(
+                        0,
+                        FLOOR(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    NOW() - $1::timestamp
+                                )
+                            ) / 60
+                        )
+                    )
+                """, session["last_billed_at"])
+
+                completed_minutes = int(elapsed_seconds or 0)
+
+                if completed_minutes <= 0:
+                    return {
+                        "billed_minutes": 0,
+                        "credits_consumed": int(
+                            session["credits_consumed"]
+                        ),
+                        "balance": await conn.fetchval("""
+                            SELECT balance
+                            FROM ai_credits
+                            WHERE user_id = $1
+                        """, session["user_id"]),
+                        "session_active": True
+                    }
+
+                # Check available credits.
+                balance = await conn.fetchval("""
+                    SELECT balance
+                    FROM ai_credits
+                    WHERE user_id = $1
+                    FOR UPDATE
+                """, session["user_id"])
+
+                balance = int(balance or 0)
+
+                # We can only bill minutes for which credits exist.
+                billable_minutes = min(
+                    completed_minutes,
+                    balance
+                )
+
+                if billable_minutes > 0:
+                    new_balance = balance - billable_minutes
+
+                    await conn.execute("""
+                        UPDATE ai_credits
+                        SET
+                            balance = $2,
+                            total_used = total_used + $3,
+                            updated_at = NOW()
+                        WHERE user_id = $1
+                    """,
+                        session["user_id"],
+                        new_balance,
+                        billable_minutes
+                    )
+
+                    await conn.execute("""
+                        INSERT INTO ai_credit_transactions (
+                            user_id,
+                            amount,
+                            transaction_type,
+                            balance_after,
+                            metadata
+                        )
+                        VALUES (
+                            $1,
+                            $2,
+                            'AI_USAGE',
+                            $3,
+                            $4::jsonb
+                        )
+                    """,
+                        session["user_id"],
+                        -billable_minutes,
+                        new_balance,
+                        json.dumps({
+                            "source": "private_ai",
+                            "session_id": session_id,
+                            "billing_unit": "active_minute"
+                        })
+                    )
+
+                    await conn.execute("""
+                        UPDATE ai_sessions
+                        SET
+                            last_billed_at =
+                                last_billed_at
+                                + ($2 * INTERVAL '1 minute'),
+                            credits_consumed =
+                                credits_consumed + $2,
+                            last_activity_at = NOW()
+                        WHERE id = $1
+                    """,
+                        session_id,
+                        billable_minutes
+                    )
+
+                # If there are not enough credits to cover all completed
+                # minutes, the session must stop so it cannot continue
+                # accumulating unpaid usage.
+                session_active = (
+                    billable_minutes == completed_minutes
+                    and balance > billable_minutes
+                )
+
+                if not session_active:
+                    await conn.execute("""
+                        UPDATE ai_sessions
+                        SET
+                            active = FALSE,
+                            updated_at = NOW()
+                        WHERE id = $1
+                    """, session_id)
+
+                return {
+                    "billed_minutes": billable_minutes,
+                    "credits_consumed": int(
+                        session["credits_consumed"]
+                    ) + billable_minutes,
+                    "balance": balance - billable_minutes,
+                    "session_active": session_active
+                }
+
+    async def close_ai_session(
+        self,
+        session_id: int
+    ) -> bool:
+        """Close an active AI session."""
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE ai_sessions
+                SET
+                    active = FALSE,
+                    last_activity_at = NOW()
+                WHERE id = $1
+                  AND active = TRUE
+            """, session_id)
+
+            return result.endswith("1")
+    # ============================================================
     # PRIVATE AI TELEGRAM ACTIVITY METHODS
     # ============================================================
 
@@ -931,7 +1207,7 @@ class Database:
                 topic_name
             )
 
-        # ============================================================
+     # ============================================================
     # PRIVATE AI TASK METHODS
     # ============================================================
 
