@@ -4206,6 +4206,107 @@ Let's connect with Aman Directly, privately and securely!
                 user_id,
                 exc
             )
+
+    async def _cleanup_private_ai_sessions(
+        self,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """
+        Bill completed AI minutes and close sessions that
+        have been inactive for more than 5 minutes.
+        """
+
+        if not PRIVATE_AI_ENABLED:
+            return
+
+        try:
+
+            sessions = await db.get_all_active_ai_sessions()
+
+            for session in sessions:
+
+                session_id = int(
+                    session["id"]
+                )
+
+                try:
+
+                    # Bill only the completed active minutes.
+                    result = await db.bill_ai_session(
+                        session_id,
+                        inactivity_minutes=5
+                    )
+
+                    if result is None:
+                        continue
+
+                    # Close session when credits are exhausted.
+                    if not result.get(
+                        "session_active",
+                        True
+                    ):
+                        await db.close_ai_session(
+                            session_id
+                        )
+                        continue
+
+                    # Get last activity directly from the
+                    # session row returned by the database.
+                    last_activity_at = session.get(
+                        "last_activity_at"
+                    )
+
+                    if last_activity_at is None:
+                        continue
+
+                    # asyncpg normally returns timezone-aware
+                    # datetime for TIMESTAMPTZ columns.
+                    from datetime import datetime, timezone
+
+                    now = datetime.now(
+                        timezone.utc
+                    )
+
+                    # Handle timezone-naive datetime safely.
+                    if last_activity_at.tzinfo is None:
+                        last_activity_at = last_activity_at.replace(
+                            tzinfo=timezone.utc
+                        )
+
+                    inactive_seconds = (
+                        now - last_activity_at
+                    ).total_seconds()
+
+                    # Close session after 5 minutes of inactivity.
+                    if inactive_seconds >= 5 * 60:
+
+                        await db.close_ai_session(
+                            session_id
+                        )
+
+                        logger.info(
+                            "Private AI session %s "
+                            "closed after %.0f seconds "
+                            "of inactivity.",
+                            session_id,
+                            inactive_seconds
+                        )
+
+                except Exception as exc:
+
+                    logger.warning(
+                        "AI session cleanup failed "
+                        "for session %s: %s",
+                        session_id,
+                        exc
+                    )
+
+        except Exception as exc:
+
+            logger.warning(
+                "Private AI session cleanup failed: %s",
+                exc
+            )
         
     async def _archive_private_ai_turn(
         self,
