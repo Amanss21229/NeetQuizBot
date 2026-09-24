@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import re
 from datetime import datetime, timezone, time
 from typing import Dict, List
 
@@ -571,6 +572,18 @@ Hello! To use this bot, you need to join our official groups/channels first.
             name="private_ai_session_cleanup"
         )
 
+       # ----------------------------------------------------
+       # PRIVATE AI REMINDER DISPATCHER
+       # ----------------------------------------------------
+
+    if PRIVATE_AI_ENABLED:
+        self.application.job_queue.run_repeating(
+            callback=self._dispatch_private_ai_reminders,
+            interval=30,
+            first=10,
+            name="private_ai_reminder_dispatcher"
+        )
+
     def _register_handlers(self):
         """Register all bot handlers"""
         # Command handlers
@@ -673,6 +686,18 @@ Hello! To use this bot, you need to join our official groups/channels first.
 
         self.application.add_handler(
             CommandHandler("forgetmemory", self.private_ai_forget_memory)
+        )
+
+        self.application.add_handler(
+            CommandHandler("remind", self.private_ai_remind)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("tasks", self.private_ai_tasks)
+        )
+        
+        self.application.add_handler(
+            CommandHandler("cancelreminder", self.private_ai_cancel_reminder)
         )
 
         # Private AI text handler runs after clone-token interception
@@ -4119,8 +4144,383 @@ Let's connect with Aman Directly, privately and securely!
         await update.message.reply_text(
             f"🗑️ `{field}` memory cleared.",
             parse_mode="Markdown"
-        )    
+        )   
 
+    async def private_ai_remind(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Create a persistent Private AI reminder."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+            
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        await db.add_user(
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name
+        )
+        
+        await self.private_ai.prepare_user(
+            user.id
+        )
+
+        reminder_text = " ".join(
+            context.args
+        ).strip()
+
+        if not reminder_text:
+            
+            await update.message.reply_text(
+                "⏰ Reminder examples:\n\n"
+                "/remind in 20 minutes Revise Biology\n"
+                "/remind tomorrow 8 pm Revise Physics\n"
+                "/remind 9:30 pm Take mock test\n"
+                "/remind daily 7 pm Revise NCERT\n"
+                "/remind every monday at 8 pm Weekly mock test"
+            )
+            
+            return
+            
+        try:
+            
+            result = (
+                await self.private_ai.tasks.parse_and_create(
+                    user_id=user.id,
+                    text=reminder_text,
+                    timezone_name="Asia/Kolkata",
+                )
+            )
+        
+        except Exception as exc:
+            
+            logger.exception(
+                "Reminder creation failed for user %s: %s",
+                user.id,
+                exc
+            )
+            
+            await update.message.reply_text(
+                "⚠️ I couldn't create that reminder right now."
+            )
+            
+            return
+            
+        if not result:
+            
+            await update.message.reply_text(
+                "🤔 I couldn't understand that reminder time.\n\n"
+                "Try:\n"
+                "/remind in 30 minutes Revise Biology\n"
+                "/remind tomorrow 8 pm Study Physics\n"
+                "/remind daily 7 pm Revise NCERT"
+            )
+            
+            return
+            
+        run_local = (
+            self.private_ai.tasks.db_to_local(
+                result["next_run_at"],
+                result["timezone"]
+            )
+        )
+        
+        schedule_type = result[
+            "schedule_type"
+        ]
+        
+        repeat_text = ""
+        
+        if schedule_type == "daily":
+            repeat_text = "\n🔁 Repeats: Daily"
+        
+        elif schedule_type == "weekly":
+            repeat_text = "\n🔁 Repeats: Weekly"
+            
+        await update.message.reply_text(
+            "✅ Reminder created!\n\n"
+            f"🆔 ID: {result['task_id']}\n"
+            f"📝 {result['task_text']}\n"
+            f"⏰ {run_local.strftime('%d %b %Y, %I:%M %p')}"
+            f"{repeat_text}\n\n"
+            "Use /tasks to view reminders."
+        )
+
+    async def private_ai_tasks(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """List the user's active reminders."""
+        
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+            
+        user = update.effective_user
+    
+        if not user or not update.message:
+            return
+            
+        try:
+            
+            tasks = (
+                await self.private_ai.tasks.list_active(
+                    user.id
+                )
+            )
+        
+        except Exception as exc:
+            
+            logger.exception(
+                "Unable to list reminders for user %s: %s",
+                user.id,
+                exc
+            )
+            
+            await update.message.reply_text(
+                "⚠️ Unable to load your reminders right now."
+            )
+            
+            return
+            
+        if not tasks:
+            
+            await update.message.reply_text(
+                "📭 You don't have any active reminders.\n\n"
+                "Create one with /remind."
+            )
+            
+            return
+            
+        lines = [
+            "⏰ Your Reminders",
+            ""
+        ]
+        
+        for task in tasks:
+            
+            next_run = task.get(
+                "next_run_at"
+            )
+            
+            timezone_name = (
+                task.get("timezone")
+                or "Asia/Kolkata"
+            )
+            
+            if next_run:
+                
+                local_time = (
+                    self.private_ai.tasks.db_to_local(
+                        next_run,
+                        timezone_name
+                    )
+                )
+                
+                time_text = local_time.strftime(
+                    "%d %b %Y, %I:%M %p"
+                )
+            
+            else:
+                time_text = "Not scheduled"
+                
+            schedule_type = (
+                task.get("schedule_type")
+                 or "once"
+            )
+            
+            if schedule_type == "daily":
+                repeat = " • Daily"
+            
+            elif schedule_type == "weekly":
+                repeat = " • Weekly"
+            
+            else:
+                repeat = ""
+                
+            lines.append(
+                f"#{task['id']} — {task['task_text']}\n"
+                f"   ⏰ {time_text}{repeat}"
+            )
+            
+            lines.append("")
+            
+        lines.append(
+            "Cancel: /cancelreminder ID"
+        )
+        
+        await update.message.reply_text(
+            "\n".join(lines)
+        )
+
+    async def private_ai_cancel_reminder(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Cancel one of the user's reminders."""
+        
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+            
+        user = update.effective_user
+        
+        if not user or not update.message:
+            return
+            
+        if not context.args:
+            
+            await update.message.reply_text(
+                "Usage:\n"
+                "/cancelreminder 12\n\n"
+                "Use /tasks to see reminder IDs."
+            )
+            
+            return
+            
+        try:
+            task_id = int(
+                context.args[0]
+            )
+        
+        except ValueError:
+            
+            await update.message.reply_text(
+                "❌ Invalid reminder ID.\n"
+                "Use /tasks to see your reminder IDs."
+            )
+            
+            return
+            
+        cancelled = (
+            await self.private_ai.tasks.cancel(
+                user.id,
+                task_id
+            )
+        )
+        
+        if not cancelled:
+            
+            await update.message.reply_text(
+                "❌ Active reminder not found."
+            )
+            
+            return
+            
+        await update.message.reply_text(
+            f"🗑️ Reminder #{task_id} cancelled."
+        )
+
+    async def _dispatch_private_ai_reminders(
+        self,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """
+        Deliver due persistent Private AI reminders.
+        
+        Runs repeatedly from Telegram JobQueue.
+        """
+        
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            return
+            
+        try:
+            
+            # ai_tasks.next_run_at uses naive UTC.
+            now_utc = (
+                datetime.now(timezone.utc)
+                .replace(tzinfo=None)
+            )
+            
+            tasks = await db.get_due_ai_tasks(
+                now_utc,
+                limit=100
+            )
+            
+            for task in tasks:
+                
+                task_id = int(
+                    task["id"]
+                )
+                
+                user_id = int(
+                    task["user_id"]
+                )
+                
+                task_text = (
+                    task.get("task_text")
+                    or "Your reminder"
+                )
+                
+                try:
+                    
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "⏰ Reminder\n\n"
+                            f"📝 {task_text}"
+                        )
+                    )
+                    # Only advance/deactivate after Telegram
+                    # successfully accepts the message.
+                    await self.private_ai.tasks.mark_delivered(
+                        task
+                    )
+                    
+                    logger.info(
+                        "Private AI reminder %s delivered "
+                        "to user %s",
+                        task_id,
+                        user_id
+                    )
+                
+                except Exception as exc:
+                    
+                    # Keep task active so a temporary Telegram
+                    # failure does not destroy the reminder.
+                    logger.warning(
+                        "Reminder %s delivery failed "
+                        "for user %s: %s",
+                        task_id,
+                        user_id,
+                        exc
+                    )
+                    
+        except Exception as exc:
+            
+            logger.exception(
+                "Private AI reminder dispatcher failed: %s",
+                exc
+            )
+    
     async def _private_ai_typing_loop(
         self,
         chat_id: int
