@@ -243,8 +243,12 @@ class MemoryService:
         # --------------------------------------------------------
 
         name_patterns = [
-            r"\bcall me\s+([A-Za-z][A-Za-z .'-]{1,30})",
-            r"\bmujhe\s+([A-Za-z][A-Za-z .'-]{1,30})\s+bulao\b",
+            r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
+            r"\bi am\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
+            r"\bi'm\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
+            r"\bcall me\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
+            r"\bmujhe\s+([A-Za-z][A-Za-z .'-]{1,30}?)\s+bulao\b",
+            r"\bmera naam\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?:\s+hai)?(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
         ]
 
         for pattern in name_patterns:
@@ -277,10 +281,16 @@ class MemoryService:
         # --------------------------------------------------------
 
         target_patterns = [
-            r"\bmy target is\s+([^.!?\n]{2,60})",
-            r"\bmera target\s+([^.!?\n]{2,60}?)(?:\s+hai)?$",
-            r"\bi am preparing for\s+([^.!?\n]{2,60})",
-            r"\bi'm preparing for\s+([^.!?\n]{2,60})",
+            r"\bmy target is\s+([^.!?\n]{2,60}?)(?=\s+(?:and|but|aur)\b|[.!?]|$)",
+            r"\bmera target\s+([^.!?\n]{2,60}?)(?:\s+hai)?(?=\s+(?:and|but|aur)\b|[.!?]|$)",
+            r"\bi am preparing for\s+([^.!?\n]{2,60}?)(?=\s+(?:and|but|aur)\b|[.!?]|$)",
+            r"\bi'm preparing for\s+([^.!?\n]{2,60}?)(?=\s+(?:and|but|aur)\b|[.!?]|$)",
+
+            # Aspirant forms
+            r"\bi am (?:a|an)\s+((?:neet|jee)(?:\s+\d{4})?)\s+aspirant\b",
+            r"\bi'm (?:a|an)\s+((?:neet|jee)(?:\s+\d{4})?)\s+aspirant\b",
+            r"\b(?:main|mai)\s+((?:neet|jee)(?:\s+\d{4})?)\s+aspirant\b",
+
             r"\bmai\s+([^.!?\n]{2,60}?)\s+ke liye prepare kar raha",
             r"\bmain\s+([^.!?\n]{2,60}?)\s+ke liye prepare kar raha",
         ]
@@ -308,6 +318,13 @@ class MemoryService:
                 ).strip()
 
                 if target:
+                    # Normalize common exam names.
+                    target_upper = target.upper()
+                    
+                    if target_upper.startswith("NEET"):
+                        target = target_upper
+                    elif target_upper.startswith("JEE"):
+                        target = target_upper
                     updates["exam_target"] = target
 
                 break
