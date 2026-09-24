@@ -14,6 +14,7 @@ from .credits import CreditService
 from .memory import MemoryService
 from .prompts import build_system_prompt
 from .safety import SafetyService
+from .tasks import TaskService
 
 
 @dataclass
@@ -43,6 +44,7 @@ class PrivateAI:
         self.credits = CreditService(db)
         self.memory = MemoryService(db)
         self.safety = SafetyService()
+        self.tasks = TaskService(db)
 
     async def prepare_user(self, user_id: int) -> bool:
         """Initialize profile and one-time credits for a user."""
