@@ -618,6 +618,9 @@ class Database:
                 UPDATE ai_profiles
                 SET
                     preferred_name = NULL,
+                    age = NULL,
+                    city = NULL,
+                    gender = NULL,
                     study_class = NULL,
                     exam_target = NULL,
                     goals = NULL,
