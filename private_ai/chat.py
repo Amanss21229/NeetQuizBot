@@ -51,24 +51,198 @@ class PrivateAI:
         await self.memory.ensure_profile(user_id)
         return await self.credits.initialize_for_user(user_id)
 
-    async def respond(self, user_id: int, user_text: str, history: Sequence[ChatMessage] = ()) -> ChatResult:
-        safety = self.safety.classify(user_text)
+    @staticmethod
+    def _clean_history_text(
+        text: str,
+        max_chars: int = 2500
+    ) -> str:
+        """
+        Keep short-term context useful without allowing one very
+        large old message to dominate the next Gemini request.
+        """
+
+        text = (text or "").strip()
+
+        if not text:
+            return ""
+
+        if len(text) <= max_chars:
+            return text
+
+        return (
+            text[:max_chars].rstrip()
+            + "\n[Earlier message shortened]"
+        )
+
+    def _prepare_history(
+        self,
+        history: Sequence[ChatMessage]
+    ) -> list[ChatMessage]:
+        """
+        Build compact recent conversation context.
+
+        Rules:
+        - only user/model messages
+        - ignore empty entries
+        - keep recent turns
+        - cap individual message size
+        - cap total context size
+        """
+
+        cleaned: list[ChatMessage] = []
+
+        for message in history:
+
+            if message.role not in {
+                "user",
+                "model"
+            }:
+                continue
+
+            content = self._clean_history_text(
+                message.content
+            )
+
+            if not content:
+                continue
+
+            cleaned.append(
+                ChatMessage(
+                    role=message.role,
+                    content=content
+                )
+            )
+
+        # Maximum 10 previous messages = roughly 5 turns.
+        cleaned = cleaned[-10:]
+
+        # Additional total-character guard.
+        max_total_chars = 12000
+
+        selected: list[ChatMessage] = []
+        total_chars = 0
+
+        for message in reversed(cleaned):
+
+            message_size = len(
+                message.content
+            )
+
+            if (
+                selected
+                and total_chars + message_size
+                > max_total_chars
+            ):
+                break
+
+            selected.append(
+                message
+            )
+
+            total_chars += message_size
+
+        selected.reverse()
+
+        return selected    
+
+    async def respond(
+        self,
+        user_id: int,
+        user_text: str,
+        history: Sequence[ChatMessage] = ()
+    ) -> ChatResult:
+
+        user_text = (
+            user_text
+            or ""
+        ).strip()
+
+        if not user_text:
+            return ChatResult(
+                text="Send me a message and I'll help you.",
+                credits_used=0,
+                safety_category="normal",
+            )
+
+        # ----------------------------------------------------
+        # SAFETY
+        # ----------------------------------------------------
+
+        safety = self.safety.classify(
+            user_text
+        )
+
         if not safety.allowed:
             return ChatResult(
-                text=self._safe_response(safety.category),
+                text=self._safe_response(
+                    safety.category
+                ),
                 credits_used=0,
                 safety_category=safety.category,
             )
 
-        context = await self.memory.build_context(user_id)
-        system_prompt = build_system_prompt(
-            memory_context=context,
-            safety_constraints=self.safety.system_constraints(),
+        # ----------------------------------------------------
+        # LONG-TERM MEMORY
+        # ----------------------------------------------------
+
+        memory_context = (
+            await self.memory.build_context(
+                user_id
+            )
         )
 
-        messages = list(history) + [ChatMessage(role="user", content=user_text)]
-        text = await self.provider.generate(messages, system_prompt)
-        return ChatResult(text=text, credits_used=0, safety_category="normal")
+        system_prompt = build_system_prompt(
+            memory_context=memory_context,
+            safety_constraints=(
+                self.safety.system_constraints()
+            ),
+        )
+
+        # ----------------------------------------------------
+        # SHORT-TERM CONVERSATION CONTEXT
+        # ----------------------------------------------------
+
+        prepared_history = (
+            self._prepare_history(
+                history
+            )
+        )
+
+        messages = (
+            prepared_history
+            + [
+                ChatMessage(
+                    role="user",
+                    content=user_text
+                )
+            ]
+        )
+
+        # ----------------------------------------------------
+        # MODEL
+        # ----------------------------------------------------
+
+        text = await self.provider.generate(
+            messages,
+            system_prompt
+        )
+
+        text = (
+            text
+            or ""
+        ).strip()
+
+        if not text:
+            text = (
+                "I couldn't generate a useful response "
+                "for that. Please try again."
+            )
+
+        return ChatResult(
+            text=text,
+            credits_used=0,
+            safety_category="normal"
+        )
 
     @staticmethod
     def _safe_response(category: str) -> str:
