@@ -120,12 +120,12 @@ class MemoryService:
             return "No saved personalization yet."
 
         labels = {
-            "preferred_name": "Preferred name",
-            "study_class": "Study class",
-            "exam_target": "Exam target",
-            "goals": "Goals",
-            "preferences": "Preferences",
-            "memory_summary": "Useful remembered facts",
+            "preferred_name": "User's preferred name",
+            "study_class": "Current study class",
+            "exam_target": "Current exam target",
+            "goals": "User-stated goals",
+            "preferences": "Response/study preferences",
+            "memory_summary": "Other explicitly remembered facts",
         }
 
         parts = []
