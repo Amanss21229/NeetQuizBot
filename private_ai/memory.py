@@ -244,12 +244,10 @@ class MemoryService:
 
         name_patterns = [
             r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
-            r"\bi am\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
-            r"\bi'm\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
             r"\bcall me\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
             r"\bmujhe\s+([A-Za-z][A-Za-z .'-]{1,30}?)\s+bulao\b",
             r"\bmera naam\s+([A-Za-z][A-Za-z .'-]{1,30}?)(?:\s+hai)?(?=\s+(?:and|but|aur)\b|[.!?,]|$)",
-        ]
+        ]        
 
         for pattern in name_patterns:
 
@@ -266,8 +264,15 @@ class MemoryService:
                     40
                 )
 
-                if name:
-                    updates["preferred_name"] = name
+                if (
+                    name
+                    and self._valid_preferred_name(
+                        name
+                    )
+                ):
+                    updates[
+                        "preferred_name"
+                    ] = name
 
                 break
 
@@ -318,14 +323,38 @@ class MemoryService:
                 ).strip()
 
                 if target:
-                    # Normalize common exam names.
-                    target_upper = target.upper()
-                    
-                    if target_upper.startswith("NEET"):
-                        target = target_upper
-                    elif target_upper.startswith("JEE"):
-                        target = target_upper
-                    updates["exam_target"] = target
+
+                    target_upper = (
+                        target.upper()
+                    )
+
+                    exam_match = re.search(
+                        r"\b(NEET|JEE)"
+                        r"(?:\s+(20\d{2}))?\b",
+                        target_upper
+                    )
+
+                    if exam_match:
+
+                        exam_name = (
+                            exam_match.group(1)
+                        )
+
+                        exam_year = (
+                            exam_match.group(2)
+                        )
+
+                        if exam_year:
+                            target = (
+                                f"{exam_name} "
+                                f"{exam_year}"
+                            )
+                        else:
+                            target = exam_name
+
+                    updates[
+                        "exam_target"
+                    ] = target
 
                 break
 
@@ -543,6 +572,62 @@ class MemoryService:
     # ============================================================
     # INTERNAL HELPERS
     # ============================================================
+
+    @staticmethod
+    def _valid_preferred_name(
+        value: str
+    ) -> bool:
+        """
+        Reject obvious sentences/descriptions accidentally
+        captured as a person's preferred name.
+        """
+
+        value = (
+            value
+            or ""
+        ).strip()
+
+        if not value:
+            return False
+
+        words = value.split()
+
+        if len(words) > 4:
+            return False
+
+        lowered = value.lower()
+
+        rejected = {
+            "tired",
+            "sad",
+            "happy",
+            "fine",
+            "good",
+            "okay",
+            "ok",
+            "student",
+            "aspirant",
+            "neet aspirant",
+            "jee aspirant",
+            "a student",
+            "an aspirant",
+        }
+
+        if lowered in rejected:
+            return False
+
+        if re.search(
+            r"\b(?:neet|jee|class|student|aspirant|preparing)\b",
+            lowered
+        ):
+            return False
+
+        return bool(
+            re.fullmatch(
+                r"[A-Za-z][A-Za-z .'-]{1,39}",
+                value
+            )
+        )    
 
     @staticmethod
     def _clean_value(
