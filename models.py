@@ -1538,6 +1538,81 @@ class Database:
                 WHERE id = $1
             """, task_id, next_run_at, active)
 
+    async def get_active_ai_task(
+        self,
+        user_id: int,
+        task_id: int
+    ) -> Optional[Dict]:
+        """Get one active task owned by a specific user."""
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT *
+                FROM ai_tasks
+                WHERE id = $1
+                  AND user_id = $2
+                  AND active = TRUE
+            """,
+                task_id,
+                user_id
+            )
+
+            return (
+                dict(row)
+                if row
+                else None
+            )
+
+    async def update_ai_task(
+        self,
+        task_id: int,
+        user_id: int,
+        task_text: str,
+        schedule_type: str,
+        schedule_data: Dict,
+        timezone_name: str,
+        next_run_at: datetime
+    ) -> bool:
+        """
+        Update an existing active task while preserving its ID.
+        Ownership is enforced by user_id.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE ai_tasks
+                SET
+                    task_text = $3,
+                    schedule_type = $4,
+                    schedule_data = $5::jsonb,
+                    timezone = $6,
+                    next_run_at = $7,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND user_id = $2
+                  AND active = TRUE
+            """,
+                task_id,
+                user_id,
+                task_text,
+                schedule_type,
+                json.dumps(schedule_data),
+                timezone_name,
+                next_run_at
+            )
+
+            return result.endswith("1")        
+
     async def get_due_ai_tasks(
         self,
         now_utc: datetime,
