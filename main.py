@@ -37,6 +37,13 @@ from telegram import (
 )
 from telegram.helpers import escape_markdown
 from telegram.constants import ChatAction
+from telegram.error import (
+    Forbidden,
+    BadRequest,
+    RetryAfter,
+    TimedOut,
+    NetworkError,
+)
 from telegram.ext import (
     Application, 
     ApplicationBuilder,
@@ -582,6 +589,10 @@ Hello! To use this bot, you need to join our official groups/channels first.
                 interval=30,
                 first=10,
                 name="private_ai_reminder_dispatcher"
+                job_kwargs={
+                    "max_instances": 1,
+                    "coalesce": True,
+                }
             )
 
     def _register_handlers(self):
@@ -4893,48 +4904,43 @@ Let's connect with Aman Directly, privately and securely!
         self,
         context: ContextTypes.DEFAULT_TYPE
     ):
-        """
-        Deliver due persistent Private AI reminders.
-        
-        Runs repeatedly from Telegram JobQueue.
-        """
-        
+        """Deliver due persistent Private AI reminders."""
+
         if (
             not PRIVATE_AI_ENABLED
             or self.private_ai is None
         ):
             return
-            
+
         try:
-            
-            # ai_tasks.next_run_at uses naive UTC.
+
             now_utc = (
                 datetime.now(timezone.utc)
                 .replace(tzinfo=None)
             )
-            
+
             tasks = await db.get_due_ai_tasks(
                 now_utc,
                 limit=100
             )
-            
+
             for task in tasks:
-                
+
                 task_id = int(
                     task["id"]
                 )
-                
+
                 user_id = int(
                     task["user_id"]
                 )
-                
+
                 task_text = (
                     task.get("task_text")
                     or "Your reminder"
-                )
-                
+                )[:500]
+
                 try:
-                    
+
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=(
@@ -4942,37 +4948,110 @@ Let's connect with Aman Directly, privately and securely!
                             f"📝 {task_text}"
                         )
                     )
-                    # Only advance/deactivate after Telegram
-                    # successfully accepts the message.
+
                     await self.private_ai.tasks.mark_delivered(
                         task
                     )
-                    
+
                     logger.info(
                         "Private AI reminder %s delivered "
                         "to user %s",
                         task_id,
                         user_id
                     )
-                
-                except Exception as exc:
-                    
-                    # Keep task active so a temporary Telegram
-                    # failure does not destroy the reminder.
+
+                except Forbidden:
+
+                    # Permanent delivery failure:
+                    # user blocked the bot / bot cannot contact user.
+                    await self.private_ai.tasks.update_next_run(
+                        task_id,
+                        None,
+                        active=False
+                    )
+
+                    logger.info(
+                        "Reminder %s disabled because "
+                        "user %s cannot receive bot messages.",
+                        task_id,
+                        user_id
+                    )
+
+                except BadRequest as exc:
+
+                    # Invalid/inaccessible private chat is normally
+                    # permanent for this reminder.
+                    error_text = str(
+                        exc
+                    ).lower()
+
+                    permanent = any(
+                        marker in error_text
+                        for marker in (
+                            "chat not found",
+                            "user not found",
+                            "bot was blocked",
+                            "have no rights",
+                        )
+                    )
+
+                    if permanent:
+
+                        await self.private_ai.tasks.update_next_run(
+                            task_id,
+                            None,
+                            active=False
+                        )
+
+                        logger.info(
+                            "Reminder %s disabled after "
+                            "permanent Telegram error.",
+                            task_id
+                        )
+
+                    else:
+
+                        logger.warning(
+                            "Reminder %s Telegram error "
+                            "for user %s: %s",
+                            task_id,
+                            user_id,
+                            exc
+                        )
+
+                except (
+                    RetryAfter,
+                    TimedOut,
+                    NetworkError
+                ) as exc:
+
+                    # Temporary Telegram/API failure.
+                    # Keep task active for a future dispatcher pass.
                     logger.warning(
-                        "Reminder %s delivery failed "
+                        "Temporary reminder delivery failure "
+                        "for task %s: %s",
+                        task_id,
+                        exc
+                    )
+
+                except Exception as exc:
+
+                    # Unknown failures remain retryable rather than
+                    # silently destroying the user's reminder.
+                    logger.exception(
+                        "Unexpected reminder %s delivery failure "
                         "for user %s: %s",
                         task_id,
                         user_id,
                         exc
                     )
-                    
+
         except Exception as exc:
-            
+
             logger.exception(
                 "Private AI reminder dispatcher failed: %s",
                 exc
-            )
+            )    
     
     async def _private_ai_typing_loop(
         self,
