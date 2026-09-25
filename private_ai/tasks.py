@@ -69,6 +69,482 @@ class TaskService:
             user_id
         )
 
+    async def get(
+        self,
+        user_id: int,
+        task_id: int
+    ) -> dict | None:
+
+        return await self.db.get_active_ai_task(
+            user_id=user_id,
+            task_id=task_id
+        )   
+
+    async def edit_text(
+        self,
+        user_id: int,
+        task_id: int,
+        new_text: str
+    ) -> dict | None:
+        """Change reminder text without changing its schedule."""
+
+        task = await self.get(
+            user_id,
+            task_id
+        )
+
+        if not task:
+            return None
+
+        new_text = (
+            new_text
+            or ""
+        ).strip()
+
+        if not new_text:
+            return None
+
+        new_text = new_text[:500]
+
+        schedule_data = (
+            task.get("schedule_data")
+            or {}
+        )
+
+        if isinstance(
+            schedule_data,
+            str
+        ):
+            try:
+                schedule_data = json.loads(
+                    schedule_data
+                )
+            except (
+                TypeError,
+                ValueError
+            ):
+                schedule_data = {}
+
+        if not isinstance(
+            schedule_data,
+            dict
+        ):
+            schedule_data = {}
+
+        updated = (
+            await self.db.update_ai_task(
+                task_id=task_id,
+                user_id=user_id,
+                task_text=new_text,
+                schedule_type=(
+                    task.get("schedule_type")
+                    or "once"
+                ),
+                schedule_data=schedule_data,
+                timezone_name=(
+                    task.get("timezone")
+                    or self.DEFAULT_TIMEZONE
+                ),
+                next_run_at=task[
+                    "next_run_at"
+                ]
+            )
+        )
+
+        if not updated:
+            return None
+
+        return await self.get(
+            user_id,
+            task_id
+        )    
+
+    async def reschedule(
+        self,
+        user_id: int,
+        task_id: int,
+        schedule_text: str
+    ) -> dict | None:
+        """
+        Reschedule an existing reminder while keeping its
+        original ID and task text.
+        """
+
+        task = await self.get(
+            user_id,
+            task_id
+        )
+
+        if not task:
+            return None
+
+        text = (
+            schedule_text
+            or ""
+        ).strip()
+
+        if not text:
+            return None
+
+        # Natural filler words.
+        text = re.sub(
+            r"^(?:to|at|for)\s+",
+            "",
+            text,
+            flags=re.IGNORECASE
+        ).strip()
+
+        timezone_name = (
+            task.get("timezone")
+            or self.DEFAULT_TIMEZONE
+        )
+
+        timezone = pytz.timezone(
+            timezone_name
+        )
+
+        now = datetime.now(
+            timezone
+        )
+
+        schedule_type = "once"
+        schedule_data = {}
+        run_local = None
+
+        # ----------------------------------------------------
+        # IN X MINUTES / HOURS
+        # ----------------------------------------------------
+
+        match = re.fullmatch(
+            r"in\s+(\d+)\s*"
+            r"(minute|minutes|min|mins|"
+            r"hour|hours|hr|hrs)",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        if match:
+
+            amount = int(
+                match.group(1)
+            )
+
+            if amount <= 0:
+                return None
+
+            unit = (
+                match.group(2)
+                .lower()
+            )
+
+            if unit.startswith(
+                ("hour", "hr")
+            ):
+                delta = timedelta(
+                    hours=amount
+                )
+            else:
+                delta = timedelta(
+                    minutes=amount
+                )
+
+            run_local = now + delta
+
+            schedule_type = "once"
+
+            schedule_data = {
+                "kind": "relative"
+            }
+
+        # ----------------------------------------------------
+        # DAILY
+        # ----------------------------------------------------
+
+        if run_local is None:
+
+            match = re.fullmatch(
+                r"(?:daily|every\s+day)"
+                r"(?:\s+at)?\s+"
+                r"(\d{1,2})"
+                r"(?::(\d{2}))?"
+                r"\s*(am|pm)?",
+                text,
+                flags=re.IGNORECASE
+            )
+
+            if match:
+
+                parsed = self._parse_clock(
+                    match.group(1),
+                    match.group(2),
+                    match.group(3)
+                )
+
+                if not parsed:
+                    return None
+
+                hour, minute = parsed
+
+                run_local = now.replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                    microsecond=0
+                )
+
+                if run_local <= now:
+                    run_local += timedelta(
+                        days=1
+                    )
+
+                schedule_type = "daily"
+
+                schedule_data = {
+                    "hour": hour,
+                    "minute": minute
+                }
+
+        # ----------------------------------------------------
+        # WEEKLY
+        # ----------------------------------------------------
+
+        if run_local is None:
+
+            weekday_names = "|".join(
+                self.WEEKDAYS.keys()
+            )
+
+            match = re.fullmatch(
+                rf"(?:every\s+)?"
+                rf"({weekday_names})"
+                r"(?:\s+at)?\s+"
+                r"(\d{1,2})"
+                r"(?::(\d{2}))?"
+                r"\s*(am|pm)?",
+                text,
+                flags=re.IGNORECASE
+            )
+
+            if match:
+
+                weekday_name = (
+                    match.group(1)
+                    .lower()
+                )
+
+                parsed = self._parse_clock(
+                    match.group(2),
+                    match.group(3),
+                    match.group(4)
+                )
+
+                if not parsed:
+                    return None
+
+                hour, minute = parsed
+
+                weekday = self.WEEKDAYS[
+                    weekday_name
+                ]
+
+                days_ahead = (
+                    weekday
+                    - now.weekday()
+                ) % 7
+
+                run_local = (
+                    now
+                    + timedelta(
+                        days=days_ahead
+                    )
+                ).replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                    microsecond=0
+                )
+
+                if run_local <= now:
+                    run_local += timedelta(
+                        days=7
+                    )
+
+                schedule_type = "weekly"
+
+                schedule_data = {
+                    "weekday": weekday,
+                    "weekday_name": weekday_name,
+                    "hour": hour,
+                    "minute": minute
+                }
+
+        # ----------------------------------------------------
+        # TOMORROW
+        # ----------------------------------------------------
+
+        if run_local is None:
+
+            match = re.fullmatch(
+                r"tomorrow"
+                r"(?:\s+at)?\s+"
+                r"(\d{1,2})"
+                r"(?::(\d{2}))?"
+                r"\s*(am|pm)?",
+                text,
+                flags=re.IGNORECASE
+            )
+
+            if match:
+
+                parsed = self._parse_clock(
+                    match.group(1),
+                    match.group(2),
+                    match.group(3)
+                )
+
+                if not parsed:
+                    return None
+
+                hour, minute = parsed
+
+                run_local = (
+                    now
+                    + timedelta(days=1)
+                ).replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                    microsecond=0
+                )
+
+                schedule_type = "once"
+
+                schedule_data = {
+                    "kind": "tomorrow"
+                }
+
+        # ----------------------------------------------------
+        # TODAY
+        # ----------------------------------------------------
+
+        if run_local is None:
+
+            match = re.fullmatch(
+                r"today"
+                r"(?:\s+at)?\s+"
+                r"(\d{1,2})"
+                r"(?::(\d{2}))?"
+                r"\s*(am|pm)?",
+                text,
+                flags=re.IGNORECASE
+            )
+
+            if match:
+
+                parsed = self._parse_clock(
+                    match.group(1),
+                    match.group(2),
+                    match.group(3)
+                )
+
+                if not parsed:
+                    return None
+
+                hour, minute = parsed
+
+                run_local = now.replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                    microsecond=0
+                )
+
+                if run_local <= now:
+                    return None
+
+                schedule_type = "once"
+
+                schedule_data = {
+                    "kind": "today"
+                }
+
+        # ----------------------------------------------------
+        # SIMPLE CLOCK
+        # 9 pm
+        # at 9:30 pm
+        # ----------------------------------------------------
+
+        if run_local is None:
+
+            match = re.fullmatch(
+                r"(?:at\s+)?"
+                r"(\d{1,2})"
+                r"(?::(\d{2}))?"
+                r"\s*(am|pm)?",
+                text,
+                flags=re.IGNORECASE
+            )
+
+            if match:
+
+                parsed = self._parse_clock(
+                    match.group(1),
+                    match.group(2),
+                    match.group(3)
+                )
+
+                if not parsed:
+                    return None
+
+                hour, minute = parsed
+
+                run_local = now.replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                    microsecond=0
+                )
+
+                if run_local <= now:
+                    run_local += timedelta(
+                        days=1
+                    )
+
+                schedule_type = "once"
+
+                schedule_data = {
+                    "kind": "clock"
+                }
+
+        if run_local is None:
+            return None
+
+        next_run_at = self._to_db_datetime(
+            run_local
+        )
+
+        updated = (
+            await self.db.update_ai_task(
+                task_id=task_id,
+                user_id=user_id,
+                task_text=task[
+                    "task_text"
+                ],
+                schedule_type=schedule_type,
+                schedule_data=schedule_data,
+                timezone_name=timezone_name,
+                next_run_at=next_run_at
+            )
+        )
+
+        if not updated:
+            return None
+
+        return await self.get(
+            user_id,
+            task_id
+        )    
+
     async def update_next_run(
         self,
         task_id: int,
