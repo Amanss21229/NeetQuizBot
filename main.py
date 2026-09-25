@@ -705,6 +705,10 @@ Hello! To use this bot, you need to join our official groups/channels first.
             CommandHandler("done", self.private_ai_done_reminder)
         )
 
+        self.application.add_handler(
+            CommandHandler("editreminder", self.private_ai_edit_reminder)
+        )        
+
         # Private AI text handler runs after clone-token interception
         # and before the existing admin-forwarding handler.
         if PRIVATE_AI_ENABLED:
@@ -4597,6 +4601,8 @@ Let's connect with Aman Directly, privately and securely!
             lines.append("")
             
             lines.append(
+                "Commands:\n"
+                "✏️ Edit: /editreminder ID NEW_TIME\n"
                 "✅ Complete: /done ID\n"
                 "🗑️ Cancel: /cancelreminder ID"
             )
@@ -4725,7 +4731,163 @@ Let's connect with Aman Directly, privately and securely!
 
         await update.message.reply_text(
             f"✅ Reminder #{task_id} marked as done."
-        )    
+        )   
+
+    async def private_ai_edit_reminder(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Edit an existing reminder."""
+
+        if (
+            not PRIVATE_AI_ENABLED
+            or self.private_ai is None
+        ):
+            await update.message.reply_text(
+                "🤖 Private AI is currently unavailable."
+            )
+            return
+
+        user = update.effective_user
+
+        if not user or not update.message:
+            return
+
+        if len(context.args) < 2:
+
+            await update.message.reply_text(
+                "✏️ Edit reminder examples:\n\n"
+                "/editreminder 12 9 pm\n"
+                "/editreminder 12 tomorrow 7 am\n"
+                "/editreminder 12 daily 8 pm\n"
+                "/editreminder 12 every monday at 8 pm\n"
+                "/editreminder 12 text Revise Organic Chemistry"
+            )
+
+            return
+
+        try:
+            task_id = int(
+                context.args[0]
+            )
+
+        except ValueError:
+
+            await update.message.reply_text(
+                "❌ Invalid reminder ID."
+            )
+
+            return
+
+        instruction = " ".join(
+            context.args[1:]
+        ).strip()
+
+        # ----------------------------------------------------
+        # TEXT EDIT
+        # ----------------------------------------------------
+
+        text_match = re.match(
+            r"^(?:text|text\s+to)\s+(.+)$",
+            instruction,
+            flags=re.IGNORECASE
+        )
+
+        try:
+
+            if text_match:
+
+                result = (
+                    await self.private_ai.tasks.edit_text(
+                        user_id=user.id,
+                        task_id=task_id,
+                        new_text=(
+                            text_match.group(1)
+                            .strip()
+                        )
+                    )
+                )
+
+                if not result:
+
+                    await update.message.reply_text(
+                        "❌ Active reminder not found."
+                    )
+
+                    return
+
+                await update.message.reply_text(
+                    f"✅ Reminder #{task_id} updated.\n\n"
+                    f"📝 {result['task_text']}"
+                )
+
+                return
+
+            # ------------------------------------------------
+            # SCHEDULE EDIT
+            # ------------------------------------------------
+
+            result = (
+                await self.private_ai.tasks.reschedule(
+                    user_id=user.id,
+                    task_id=task_id,
+                    schedule_text=instruction
+                )
+            )
+
+            if not result:
+
+                await update.message.reply_text(
+                    "🤔 I couldn't understand that change.\n\n"
+                    "Examples:\n"
+                    "/editreminder 12 9 pm\n"
+                    "/editreminder 12 tomorrow 7 am\n"
+                    "/editreminder 12 daily 8 pm"
+                )
+
+                return
+
+            run_local = (
+                self.private_ai.tasks.db_to_local(
+                    result["next_run_at"],
+                    result.get("timezone")
+                    or "Asia/Kolkata"
+                )
+            )
+
+            repeat = ""
+
+            if result.get(
+                "schedule_type"
+            ) == "daily":
+                repeat = "\n🔁 Repeats daily"
+
+            elif result.get(
+                "schedule_type"
+            ) == "weekly":
+                repeat = "\n🔁 Repeats weekly"
+
+            await update.message.reply_text(
+                f"✅ Reminder #{task_id} rescheduled.\n\n"
+                f"📝 {result['task_text']}\n"
+                f"⏰ {run_local.strftime('%d %b %Y, %I:%M %p')}"
+                f"{repeat}"
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "Reminder edit failed for user %s, "
+                "task %s: %s",
+                user.id,
+                task_id,
+                exc
+            )
+
+            await update.message.reply_text(
+                "⚠️ I couldn't update that reminder right now."
+            )    
 
     async def _dispatch_private_ai_reminders(
         self,
@@ -4875,6 +5037,215 @@ Let's connect with Aman Directly, privately and securely!
         await self.private_ai.prepare_user(
             user_id
         )
+
+        # ----------------------------------------------------
+        # NATURAL REMINDER MANAGEMENT
+        # ----------------------------------------------------
+
+        normalized_task_text = (
+            user_text
+            .strip()
+        )
+
+        # SHOW REMINDERS
+        if re.fullmatch(
+            r"(?:show|list)\s+"
+            r"(?:my\s+)?reminders?",
+            normalized_task_text,
+            flags=re.IGNORECASE
+        ):
+
+            await self.private_ai_tasks(
+                update,
+                context
+            )
+
+            return
+
+        # CANCEL / DELETE
+        match = re.fullmatch(
+            r"(?:cancel|delete)\s+"
+            r"(?:my\s+)?reminder\s+#?(\d+)",
+            normalized_task_text,
+            flags=re.IGNORECASE
+        )
+
+        if not match:
+            match = re.fullmatch(
+                r"(?:mera\s+)?reminder\s+#?(\d+)"
+                r"\s+(?:cancel|delete)\s+kar\s+do",
+                normalized_task_text,
+                flags=re.IGNORECASE
+            )
+
+        if match:
+
+            task_id = int(
+                match.group(1)
+            )
+
+            cancelled = (
+                await self.private_ai.tasks.cancel(
+                    user_id,
+                    task_id
+                )
+            )
+
+            if cancelled:
+                await update.message.reply_text(
+                    f"🗑️ Reminder #{task_id} cancelled."
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Active reminder not found."
+                )
+
+            return
+
+        # MARK DONE
+        match = re.fullmatch(
+            r"(?:mark\s+)?"
+            r"reminder\s+#?(\d+)"
+            r"\s+(?:as\s+)?done",
+            normalized_task_text,
+            flags=re.IGNORECASE
+        )
+
+        if not match:
+            match = re.fullmatch(
+                r"(?:mera\s+)?reminder\s+#?(\d+)"
+                r"\s+done\s+kar\s+do",
+                normalized_task_text,
+                flags=re.IGNORECASE
+            )
+
+        if match:
+
+            task_id = int(
+                match.group(1)
+            )
+
+            completed = (
+                await self.private_ai.tasks.cancel(
+                    user_id,
+                    task_id
+                )
+            )
+
+            if completed:
+                await update.message.reply_text(
+                    f"✅ Reminder #{task_id} marked as done."
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Active reminder not found."
+                )
+
+            return
+
+        # CHANGE REMINDER TEXT
+        match = re.fullmatch(
+            r"(?:change|edit)\s+"
+            r"reminder\s+#?(\d+)"
+            r"\s+text\s+(?:to\s+)?(.+)",
+            normalized_task_text,
+            flags=re.IGNORECASE
+        )
+
+        if match:
+
+            task_id = int(
+                match.group(1)
+            )
+
+            new_text = (
+                match.group(2)
+                .strip()
+            )
+
+            result = (
+                await self.private_ai.tasks.edit_text(
+                    user_id,
+                    task_id,
+                    new_text
+                )
+            )
+
+            if result:
+                await update.message.reply_text(
+                    f"✅ Reminder #{task_id} updated.\n\n"
+                    f"📝 {result['task_text']}"
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Active reminder not found."
+                )
+
+            return
+
+        # RESCHEDULE
+        match = re.fullmatch(
+            r"(?:change|move|reschedule)\s+"
+            r"reminder\s+#?(\d+)"
+            r"\s+(?:to\s+)?(.+)",
+            normalized_task_text,
+            flags=re.IGNORECASE
+        )
+
+        if not match:
+            match = re.fullmatch(
+                r"reminder\s+#?(\d+)"
+                r"\s+ko\s+(.+?)\s+"
+                r"(?:kar\s+do|kar\s+dena)",
+                normalized_task_text,
+                flags=re.IGNORECASE
+            )
+
+        if match:
+
+            task_id = int(
+                match.group(1)
+            )
+
+            new_schedule = (
+                match.group(2)
+                .strip()
+            )
+
+            result = (
+                await self.private_ai.tasks.reschedule(
+                    user_id,
+                    task_id,
+                    new_schedule
+                )
+            )
+
+            if not result:
+
+                await update.message.reply_text(
+                    "🤔 I couldn't understand the new time.\n\n"
+                    "Try:\n"
+                    "Change reminder 12 to 9 pm\n"
+                    "Change reminder 12 to tomorrow 7 am"
+                )
+
+                return
+
+            run_local = (
+                self.private_ai.tasks.db_to_local(
+                    result["next_run_at"],
+                    result.get("timezone")
+                    or "Asia/Kolkata"
+                )
+            )
+
+            await update.message.reply_text(
+                f"✅ Reminder #{task_id} rescheduled.\n\n"
+                f"📝 {result['task_text']}\n"
+                f"⏰ {run_local.strftime('%d %b %Y, %I:%M %p')}"
+            )
+
+            return        
 
         # ----------------------------------------------------
         # NATURAL-LANGUAGE REMINDER
