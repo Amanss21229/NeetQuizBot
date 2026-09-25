@@ -5010,7 +5010,7 @@ Let's connect with Aman Directly, privately and securely!
         history = self.ai_histories.get(
             user_id,
             []
-        )[-12:]
+        )[-10:]
 
         # ----------------------------------------------------
         # TYPING INDICATOR
@@ -5093,7 +5093,7 @@ Let's connect with Aman Directly, privately and securely!
 
             self.ai_histories[
                 user_id
-            ] = history[-12:]
+            ] = history[-10:]
 
         # ----------------------------------------------------
         # LONG-TERM MEMORY LEARNING
