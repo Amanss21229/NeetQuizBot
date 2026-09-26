@@ -95,12 +95,13 @@ class GeminiProvider:
                         attempt + 1,
                     )
 
-                    response = (
-                        await self.client.aio.models.generate_content(
+                    response = await asyncio.wait_for(
+                        self.client.aio.models.generate_content(
                             model=model_name,
                             contents=contents,
                             config=config,
-                        )
+                        ),
+                        timeout=45
                     )
 
                     text = getattr(
@@ -120,6 +121,27 @@ class GeminiProvider:
                     )
 
                     return text.strip()
+
+                except asyncio.TimeoutError as exc:
+
+                    last_error = exc
+
+                    logger.warning(
+                        "Gemini request timed out: "
+                        "model=%s attempt=%s",
+                        model_name,
+                        attempt + 1
+                    )
+
+                    if attempt == 0:
+
+                        await asyncio.sleep(
+                            1.0
+                        )
+
+                        continue
+
+                    break                
 
                 except APIError as exc:
 
