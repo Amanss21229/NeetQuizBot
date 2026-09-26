@@ -304,6 +304,7 @@ class NEETQuizBot:
         self.private_ai = None
         self.ai_provider = None
         self.ai_histories = {}
+        self.ai_request_locks = {}
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -5071,6 +5072,26 @@ Let's connect with Aman Directly, privately and securely!
 
         except asyncio.CancelledError:
             return
+            
+            def _get_private_ai_lock(
+                self,
+                user_id: int
+            ) -> asyncio.Lock:
+                """Return one in-process AI generation lock per user."""
+                
+                lock = self.ai_request_locks.get(
+                    user_id
+                )
+                
+                if lock is None:
+                    
+                    lock = asyncio.Lock()
+                    
+                    self.ai_request_locks[            
+                        user_id
+                    ] = lock
+                    
+                return lock            
 
     async def private_ai_message(
         self,
@@ -5098,6 +5119,15 @@ Let's connect with Aman Directly, privately and securely!
         user_text = update.message.text or ""
 
         if not user_text.strip():
+            return
+
+        if len(user_text) > 6000:
+
+            await update.message.reply_text(
+                "📄 That message is too long for one AI request.\n\n"
+                "Please split it into smaller parts."
+            )
+
             return
 
         # Never interfere with clone-bot token setup.
@@ -5462,6 +5492,19 @@ Let's connect with Aman Directly, privately and securely!
             []
         )[-10:]
 
+        ai_lock = self._get_private_ai_lock(
+            user_id
+        )
+
+        if ai_lock.locked():
+
+            await update.message.reply_text(
+                "⏳ I'm still answering your previous message. "
+                "Please wait for that reply first."
+            )
+
+            return
+        
         # ----------------------------------------------------
         # TYPING INDICATOR
         # ----------------------------------------------------
@@ -5474,11 +5517,13 @@ Let's connect with Aman Directly, privately and securely!
 
         try:
 
-            result = await self.private_ai.respond(
-                user_id,
-                user_text,
-                history=history
-            )
+            async with ai_lock:
+
+                result = await self.private_ai.respond(
+                    user_id,
+                    user_text,
+                    history=history
+                )
 
         except asyncio.CancelledError:
             typing_task.cancel()
@@ -5723,14 +5768,20 @@ Let's connect with Aman Directly, privately and securely!
                 "Private AI session cleanup failed: %s",
                 exc
             )
-        
+
     async def _archive_private_ai_turn(
         self,
         user,
         user_text,
         ai_text
     ):
-        """Archive a user/AI turn in one forum topic per user."""
+        """
+        Archive a Private-AI turn.
+
+        Archive failure must never affect the user's AI chat.
+        Plain text is intentionally used because user/model
+        content is untrusted Markdown.
+        """
 
         if not AI_ACTIVITY_GROUP_ID:
             return
@@ -5740,18 +5791,29 @@ Let's connect with Aman Directly, privately and securely!
         )
 
         if existing:
+
             topic_id = int(
                 existing["topic_id"]
             )
+
         else:
+
             username = (
                 f"@{user.username}"
                 if user.username
                 else "no_username"
             )
 
+            safe_first_name = (
+                user.first_name
+                or "User"
+            ).replace(
+                "\n",
+                " "
+            )
+
             topic_name = (
-                f"{user.first_name or 'User'} "
+                f"{safe_first_name} "
                 f"{username} | {user.id}"
             )[:128]
 
@@ -5762,7 +5824,9 @@ Let's connect with Aman Directly, privately and securely!
                 )
             )
 
-            topic_id = topic.message_thread_id
+            topic_id = (
+                topic.message_thread_id
+            )
 
             await db.save_ai_activity(
                 user.id,
@@ -5771,28 +5835,45 @@ Let's connect with Aman Directly, privately and securely!
                 topic_name
             )
 
+        # Telegram text messages have a size limit.
+        user_text = (
+            user_text
+            or ""
+        )[:3500]
+
+        ai_text = (
+            ai_text
+            or ""
+        )[:3800]
+
+        username = (
+            f"@{user.username}"
+            if user.username
+            else "none"
+        )
+
         user_header = (
-            "👤 *USER MESSAGE*\n"
+            "👤 USER MESSAGE\n"
             f"Name: {user.first_name or 'Unknown'}\n"
-            f"Username: "
-            f"@{user.username if user.username else 'none'}\n"
-            f"ID: `{user.id}`\n\n"
+            f"Username: {username}\n"
+            f"ID: {user.id}\n\n"
             f"{user_text}"
         )
 
         await self.application.bot.send_message(
             chat_id=AI_ACTIVITY_GROUP_ID,
             message_thread_id=topic_id,
-            text=user_header,
-            parse_mode="Markdown"
+            text=user_header
         )
 
         await self.application.bot.send_message(
             chat_id=AI_ACTIVITY_GROUP_ID,
             message_thread_id=topic_id,
-            text=f"🤖 *AI REPLY*\n\n{ai_text}",
-            parse_mode="Markdown"
-        )
+            text=(
+                "🤖 AI REPLY\n\n"
+                f"{ai_text}"
+            )
+        )    
 
     async def forward_user_message_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Forward any user message from private chat to admin group."""
