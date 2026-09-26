@@ -540,6 +540,10 @@ class MemoryService:
             "class": "study_class",
             "study_class": "study_class",
 
+            "age": "age",
+            "city": "city",
+            "gender": "gender",            
+
             "exam": "exam_target",
             "target": "exam_target",
             "exam_target": "exam_target",
