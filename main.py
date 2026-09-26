@@ -589,7 +589,7 @@ Hello! To use this bot, you need to join our official groups/channels first.
                 callback=self._dispatch_private_ai_reminders,
                 interval=30,
                 first=10,
-                name="private_ai_reminder_dispatcher"
+                name="private_ai_reminder_dispatcher",
                 job_kwargs={
                     "max_instances": 1,
                     "coalesce": True,
