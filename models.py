@@ -642,6 +642,9 @@ class Database:
 
         allowed_fields = {
             "preferred_name",
+            "age",
+            "city",
+            "gender",
             "study_class",
             "exam_target",
             "goals",
