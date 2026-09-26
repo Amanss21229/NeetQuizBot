@@ -1654,7 +1654,307 @@ class Database:
             return [
                 dict(row)
                 for row in rows
-            ]    
+            ]   
+
+    async def get_ai_analytics(
+        self
+    ) -> Dict:
+        """Return aggregate operational statistics for Private AI."""
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+
+            row = await conn.fetchrow("""
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_profiles
+                    ) AS ai_profiles,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_credits
+                    ) AS credit_users,
+
+                    (
+                        SELECT COALESCE(
+                            SUM(balance),
+                            0
+                        )
+                        FROM ai_credits
+                    ) AS credits_available,
+
+                    (
+                        SELECT COALESCE(
+                            SUM(total_earned),
+                            0
+                        )
+                        FROM ai_credits
+                    ) AS credits_earned,
+
+                    (
+                        SELECT COALESCE(
+                            SUM(total_used),
+                            0
+                        )
+                        FROM ai_credits
+                    ) AS credits_used,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_sessions
+                        WHERE active = TRUE
+                    ) AS active_sessions,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_sessions
+                    ) AS total_sessions,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_tasks
+                    ) AS total_tasks,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_tasks
+                        WHERE active = TRUE
+                    ) AS active_tasks,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_activity
+                    ) AS activity_topics,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_credit_transactions
+                        WHERE created_at >= NOW() - INTERVAL '24 hours'
+                    ) AS credit_transactions_24h,
+
+                    (
+                        SELECT COUNT(DISTINCT user_id)
+                        FROM ai_sessions
+                        WHERE started_at >= NOW() - INTERVAL '24 hours'
+                    ) AS ai_users_24h
+            """)
+
+            return dict(row)    
+
+    async def get_ai_user_snapshot(
+        self,
+        user_id: int
+    ) -> Optional[Dict]:
+        """
+        Return operational AI information for one user.
+
+        Private memory values are intentionally not returned.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+
+            row = await conn.fetchrow("""
+                SELECT
+                    u.id,
+                    u.username,
+                    u.first_name,
+                    u.last_name,
+                    u.created_at AS user_created_at,
+
+                    COALESCE(
+                        c.balance,
+                        0
+                    ) AS balance,
+
+                    COALESCE(
+                        c.total_earned,
+                        0
+                    ) AS total_earned,
+
+                    COALESCE(
+                        c.total_used,
+                        0
+                    ) AS total_used,
+
+                    c.last_bonus_at,
+
+                    EXISTS (
+                        SELECT 1
+                        FROM ai_profiles p
+                        WHERE p.user_id = u.id
+                    ) AS has_ai_profile,
+
+                    EXISTS (
+                        SELECT 1
+                        FROM ai_sessions s
+                        WHERE s.user_id = u.id
+                          AND s.active = TRUE
+                    ) AS active_session,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_sessions s
+                        WHERE s.user_id = u.id
+                    ) AS total_sessions,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_tasks t
+                        WHERE t.user_id = u.id
+                          AND t.active = TRUE
+                    ) AS active_tasks,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_tasks t
+                        WHERE t.user_id = u.id
+                    ) AS total_tasks,
+
+                    EXISTS (
+                        SELECT 1
+                        FROM ai_activity a
+                        WHERE a.user_id = u.id
+                    ) AS has_activity_topic,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM ai_credit_transactions ct
+                        WHERE ct.user_id = u.id
+                    ) AS credit_transactions
+
+                FROM users u
+
+                LEFT JOIN ai_credits c
+                    ON c.user_id = u.id
+
+                WHERE u.id = $1
+            """,
+                user_id
+            )
+
+            return (
+                dict(row)
+                if row
+                else None
+            )    
+
+    async def get_ai_memory_status(
+        self,
+        user_id: int
+    ) -> Dict:
+        """
+        Return only which personalization fields are populated.
+        Never return their private values.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+
+            row = await conn.fetchrow("""
+                SELECT
+                    preferred_name IS NOT NULL
+                        AS has_name,
+
+                    study_class IS NOT NULL
+                        AS has_study_class,
+
+                    exam_target IS NOT NULL
+                        AS has_exam_target,
+
+                    goals IS NOT NULL
+                        AS has_goals,
+
+                    preferences IS NOT NULL
+                        AS has_preferences,
+
+                    memory_summary IS NOT NULL
+                        AS has_memory_summary
+
+                FROM ai_profiles
+                WHERE user_id = $1
+            """,
+                user_id
+            )
+
+            if not row:
+                return {
+                    "has_name": False,
+                    "has_study_class": False,
+                    "has_exam_target": False,
+                    "has_goals": False,
+                    "has_preferences": False,
+                    "has_memory_summary": False,
+                }
+
+            return dict(row)    
+
+    async def get_top_ai_users(
+        self,
+        limit: int = 10
+    ) -> List[Dict]:
+        """
+        Rank users by actual recorded AI credits consumed.
+
+        This is usage analytics, not a quality/performance ranking.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        limit = max(
+            1,
+            min(
+                int(limit),
+                25
+            )
+        )
+
+        async with self.pool.acquire() as conn:
+
+            rows = await conn.fetch("""
+                SELECT
+                    u.id,
+                    u.username,
+                    u.first_name,
+                    c.balance,
+                    c.total_earned,
+                    c.total_used
+                FROM ai_credits c
+
+                JOIN users u
+                    ON u.id = c.user_id
+
+                WHERE c.total_used > 0
+
+                ORDER BY
+                    c.total_used DESC,
+                    u.id ASC
+
+                LIMIT $1
+            """,
+                limit
+            )
+
+            return [
+                dict(row)
+                for row in rows
+            ]        
     
     async def add_group(self, group_id: int, title: str, group_type: str, username: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update group in database"""
