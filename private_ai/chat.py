@@ -5,9 +5,10 @@ integration phase can plug in a free-tier provider without changing the bot's
 credit/memory/safety interfaces.
 """
 
+from __future__ import annotations
+
 import html
 import re
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol, Sequence
