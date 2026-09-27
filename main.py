@@ -5418,26 +5418,21 @@ Let's connect with Aman Directly, privately and securely!
 
         except asyncio.CancelledError:
             return
+    def _get_private_ai_lock(
+        self,
+        user_id: int
+    ) -> asyncio.Lock:
+        """Return one in-process AI generation lock per user."""
+                
+        lock = self.ai_request_locks.get(user_id)
+
+        if lock is None:
             
-            def _get_private_ai_lock(
-                self,
-                user_id: int
-            ) -> asyncio.Lock:
-                """Return one in-process AI generation lock per user."""
-                
-                lock = self.ai_request_locks.get(
-                    user_id
-                )
-                
-                if lock is None:
-                    
-                    lock = asyncio.Lock()
-                    
-                    self.ai_request_locks[            
-                        user_id
-                    ] = lock
-                    
-                return lock            
+            lock = asyncio.Lock()
+            
+            self.ai_request_locks[user_id] = lock
+            
+        return lock            
 
     async def private_ai_message(
         self,
