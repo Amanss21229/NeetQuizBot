@@ -916,12 +916,28 @@ Let's ace NEET together! 🚀
             except Exception as e:
                 logger.warning(f"Failed to add group/channel to database: {e}")
     
-    async def handle_quiz(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle quiz messages from admin group"""
-        message = update.message
+    async def handle_quiz(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Handle quiz messages from admin group."""
+
+        message = update.effective_message
+
+        if not message:
+            return
+
         poll = message.poll
+
+        if not poll:
+            return
+
         chat = update.effective_chat
         user = update.effective_user
+
+        if not chat:
+            return    
 
         # ── UpdateQuiz mode: collect polls sent by owner from any chat ──
         if self.update_quiz_mode:
@@ -5339,6 +5355,10 @@ Let's connect with Aman Directly, privately and securely!
                             "user not found",
                             "bot was blocked",
                             "have no rights",
+                            "user_bot_to_bot_disabled",
+                            "user bot to bot disabled",
+                            "bot can't initiate conversation",
+                            "bot cannot initiate conversation",
                         )
                     )
 
@@ -5418,6 +5438,8 @@ Let's connect with Aman Directly, privately and securely!
 
         except asyncio.CancelledError:
             return
+
+
     def _get_private_ai_lock(
         self,
         user_id: int
@@ -5983,10 +6005,34 @@ Let's connect with Aman Directly, privately and securely!
         # REPLY
         # ----------------------------------------------------
 
-        await update.message.reply_text(
-            result.text,
-            reply_to_message_id=update.message.message_id
-        )
+        try:
+
+            await update.message.reply_text(
+                result.text,
+                parse_mode="HTML",
+                reply_to_message_id=update.message.message_id
+            )
+
+        except BadRequest as exc:
+
+            logger.warning(
+                "AI HTML rendering failed for user %s: %s",
+                user_id,
+                exc
+            )
+
+            # Formatting must never prevent the actual answer
+            # from reaching the user.
+            plain_text = re.sub(
+                r"<[^>]+>",
+                "",
+                result.text
+            )
+
+            await update.message.reply_text(
+                plain_text,
+                reply_to_message_id=update.message.message_id
+            )
 
         # ----------------------------------------------------
         # ACTIVITY GC ARCHIVE
@@ -6114,7 +6160,7 @@ Let's connect with Aman Directly, privately and securely!
         self,
         user,
         user_text,
-        ai_text
+        clean_ai_text
     ):
         """
         Archive a Private-AI turn.
@@ -6182,8 +6228,8 @@ Let's connect with Aman Directly, privately and securely!
             or ""
         )[:3500]
 
-        ai_text = (
-            ai_text
+        clean_ai_text = (
+            clean_ai_text
             or ""
         )[:3800]
 
