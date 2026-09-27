@@ -617,6 +617,9 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("gbroadcast", self.gbroadcast_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("credit", self.private_ai_admin_credit))
+        self.application.add_handler(CommandHandler("aistats", self.private_ai_admin_stats))
+        self.application.add_handler(CommandHandler("aiuser", self.private_ai_admin_user))
+        self.application.add_handler(CommandHandler("aitop", self.private_ai_admin_top))
         self.application.add_handler(CommandHandler("promote", self.promote_command))
         self.application.add_handler(CommandHandler("remove", self.remove_command))
         self.application.add_handler(CommandHandler("adminlist", self.adminlist_command))
@@ -787,6 +790,10 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("addnegativereply", "Add negative reply"),
             BotCommand("removereply", "Remove custom reply"),
             BotCommand("forward", "Forward message to all (shows sender)"),
+            BotCommand("credit", "Adjust AI credits"),
+            BotCommand("aistats", "Private AI operations"),
+            BotCommand("aiuser", "Inspect AI user stats"),
+            BotCommand("aitop", "Top AI usage"),
         ]
         
         await self.application.bot.set_my_commands(commands)
@@ -4233,7 +4240,346 @@ Let's connect with Aman Directly, privately and securely!
                 "Could not notify credit user %s: %s",
                 target_user_id,
                 exc
-            )    
+            )   
+
+    async def private_ai_admin_stats(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Admin-only Private AI operational dashboard."""
+
+        if not update.message:
+            return
+
+        admin = update.effective_user
+
+        if not admin:
+            return
+
+        if not await db.is_admin(
+            admin.id
+        ):
+            await update.message.reply_text(
+                "❌ Admin-only command."
+            )
+            return
+
+        try:
+
+            stats = (
+                await db.get_ai_analytics()
+            )
+
+            await update.message.reply_text(
+                "🤖 PRIVATE AI — OPERATIONS\n\n"
+
+                "👥 USERS\n"
+                f"AI profiles: {stats['ai_profiles']:,}\n"
+                f"Credit accounts: {stats['credit_users']:,}\n"
+                f"AI users (last 24h): {stats['ai_users_24h']:,}\n\n"
+
+                "💳 CREDITS\n"
+                f"Available balance: {stats['credits_available']:,}\n"
+                f"Total earned: {stats['credits_earned']:,}\n"
+                f"Total consumed: {stats['credits_used']:,}\n"
+                f"Transactions (24h): "
+                f"{stats['credit_transactions_24h']:,}\n\n"
+
+                "💬 SESSIONS\n"
+                f"Active now: {stats['active_sessions']:,}\n"
+                f"Total sessions: {stats['total_sessions']:,}\n\n"
+
+                "⏰ REMINDERS\n"
+                f"Active: {stats['active_tasks']:,}\n"
+                f"Total created: {stats['total_tasks']:,}\n\n"
+
+                "🗂 ACTIVITY ARCHIVE\n"
+                f"User topics: {stats['activity_topics']:,}"
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "AI stats command failed: %s",
+                exc
+            )
+
+            await update.message.reply_text(
+                "⚠️ AI analytics could not be loaded."
+            )
+
+    async def private_ai_admin_user(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Admin-only operational snapshot for one AI user."""
+
+        if not update.message:
+            return
+
+        admin = update.effective_user
+
+        if not admin:
+            return
+
+        if not await db.is_admin(
+            admin.id
+        ):
+            await update.message.reply_text(
+                "❌ Admin-only command."
+            )
+            return
+
+        if len(context.args) != 1:
+
+            await update.message.reply_text(
+                "Usage:\n"
+                "/aiuser 123456789"
+            )
+            return
+
+        try:
+            user_id = int(
+                context.args[0]
+            )
+
+        except ValueError:
+
+            await update.message.reply_text(
+                "❌ Invalid user ID."
+            )
+            return
+
+        try:
+
+            snapshot = (
+                await db.get_ai_user_snapshot(
+                    user_id
+                )
+            )
+
+            if not snapshot:
+
+                await update.message.reply_text(
+                    "❌ User not found in bot database."
+                )
+                return
+
+            memory = (
+                await db.get_ai_memory_status(
+                    user_id
+                )
+            )
+
+            username = (
+                f"@{snapshot['username']}"
+                if snapshot.get("username")
+                else "None"
+            )
+
+            name = " ".join(
+                part
+                for part in (
+                    snapshot.get("first_name"),
+                    snapshot.get("last_name")
+                )
+                if part
+            ) or "Unknown"
+
+            memory_fields = []
+
+            field_labels = {
+                "has_name": "name",
+                "has_study_class": "class",
+                "has_exam_target": "exam target",
+                "has_goals": "goals",
+                "has_preferences": "preferences",
+                "has_memory_summary": "memory summary",
+            }
+
+            for key, label in field_labels.items():
+
+                if memory.get(key):
+                    memory_fields.append(
+                        label
+                    )
+
+            memory_text = (
+                ", ".join(memory_fields)
+                if memory_fields
+                else "None"
+            )
+
+            session_status = (
+                "Active"
+                if snapshot[
+                    "active_session"
+                ]
+                else "Inactive"
+            )
+
+            archive_status = (
+                "Yes"
+                if snapshot[
+                    "has_activity_topic"
+                ]
+                else "No"
+            )
+
+            await update.message.reply_text(
+                "🤖 AI USER SNAPSHOT\n\n"
+
+                f"👤 Name: {name}\n"
+                f"🔗 Username: {username}\n"
+                f"🆔 User ID: {snapshot['id']}\n\n"
+
+                "💳 CREDITS\n"
+                f"Balance: {snapshot['balance']:,}\n"
+                f"Earned: {snapshot['total_earned']:,}\n"
+                f"Consumed: {snapshot['total_used']:,}\n"
+                f"Transactions: "
+                f"{snapshot['credit_transactions']:,}\n\n"
+
+                "💬 AI USAGE\n"
+                f"Session: {session_status}\n"
+                f"Total sessions: "
+                f"{snapshot['total_sessions']:,}\n\n"
+
+                "⏰ REMINDERS\n"
+                f"Active: {snapshot['active_tasks']:,}\n"
+                f"Total: {snapshot['total_tasks']:,}\n\n"
+
+                "🧠 MEMORY STATUS\n"
+                f"Saved fields: {memory_text}\n\n"
+
+                "🗂 Activity topic: "
+                f"{archive_status}"
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "AI user snapshot failed "
+                "for user %s: %s",
+                user_id,
+                exc
+            )
+
+            await update.message.reply_text(
+                "⚠️ User analytics could not be loaded."
+            )
+
+    async def private_ai_admin_top(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """Admin-only AI usage leaderboard."""
+
+        if not update.message:
+            return
+
+        admin = update.effective_user
+
+        if not admin:
+            return
+
+        if not await db.is_admin(
+            admin.id
+        ):
+            await update.message.reply_text(
+                "❌ Admin-only command."
+            )
+            return
+
+        limit = 10
+
+        if context.args:
+
+            try:
+
+                limit = int(
+                    context.args[0]
+                )
+
+            except ValueError:
+
+                await update.message.reply_text(
+                    "Usage:\n"
+                    "/aitop\n"
+                    "/aitop 20"
+                )
+                return
+
+        limit = max(
+            1,
+            min(
+                limit,
+                25
+            )
+        )
+
+        try:
+
+            users = (
+                await db.get_top_ai_users(
+                    limit
+                )
+            )
+
+            if not users:
+
+                await update.message.reply_text(
+                    "📊 No recorded AI credit usage yet."
+                )
+                return
+
+            lines = [
+                "📊 TOP AI USAGE",
+                ""
+            ]
+
+            for index, user in enumerate(
+                users,
+                start=1
+            ):
+
+                display_name = (
+                    user.get("first_name")
+                    or "User"
+                )
+
+                username = (
+                    f" @{user['username']}"
+                    if user.get("username")
+                    else ""
+                )
+
+                lines.append(
+                    f"{index}. {display_name}{username}\n"
+                    f"   ID: {user['id']}\n"
+                    f"   Used: {user['total_used']:,} | "
+                    f"Balance: {user['balance']:,}"
+                )
+
+            await update.message.reply_text(
+                "\n\n".join(
+                    lines
+                )
+            )
+
+        except Exception as exc:
+
+            logger.exception(
+                "AI top usage command failed: %s",
+                exc
+            )
+
+            await update.message.reply_text(
+                "⚠️ AI usage analytics could not be loaded."
+            )
 
     async def private_ai_memory(
         self,
