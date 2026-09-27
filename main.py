@@ -6160,7 +6160,7 @@ Let's connect with Aman Directly, privately and securely!
         self,
         user,
         user_text,
-        clean_ai_text
+        ai_text
     ):
         """
         Archive a Private-AI turn.
@@ -6169,6 +6169,14 @@ Let's connect with Aman Directly, privately and securely!
         Plain text is intentionally used because user/model
         content is untrusted Markdown.
         """
+
+                # AI response is rendered as HTML in the user's DM.
+        # Activity GC stores a clean plain-text copy.
+        clean_ai_text = re.sub(
+            r"<[^>]+>",
+            "",
+            str(ai_text or "")
+        ).strip()
 
         if not AI_ACTIVITY_GROUP_ID:
             return
@@ -6258,7 +6266,7 @@ Let's connect with Aman Directly, privately and securely!
             message_thread_id=topic_id,
             text=(
                 "🤖 AI REPLY\n\n"
-                f"{ai_text}"
+                f"{clean_ai_text}"
             )
         )    
 
