@@ -261,18 +261,20 @@ Formatting rules:
 - NEVER use Markdown headings such as #, ## or ###.
 - NEVER use Markdown tables.
 - NEVER use LaTeX delimiters such as $, $$, \\( or \\).
-- NEVER use LaTeX commands such as \\text{}, \\frac{}, \\mathrm{}.
+- NEVER output raw LaTeX commands.
 - Do not wrap the whole response in a code block.
 
 For academic/scientific content:
 
-- Write formulas in readable Unicode/plain text whenever possible.
-- Example: C₆H₁₄ instead of $C_6H_{14}$.
-- Example: H₂SO₄ instead of H_2SO_4.
-- Example: x² instead of x^2 when practical.
-- Example: ½ or (a/b) instead of LaTeX fractions when practical.
+- Prefer readable Unicode and plain text for formulas.
+- Write chemical formulas with Unicode subscripts when practical.
+- Example: write C₆H₁₄ instead of raw LaTeX-style chemical notation.
+- Example: write H₂SO₄ instead of raw underscore-based chemical notation.
+- Example: write x² instead of raw exponent markup when practical.
+- Use ½ or (a/b) for simple fractions when practical.
 - Use →, ⇌, Δ, °, ×, ÷, ≤, ≥ and similar Unicode symbols
   when they improve readability.
+- Never expose raw LaTeX commands to the user.
 
 Structure:
 
