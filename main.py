@@ -1100,11 +1100,11 @@ Let's ace NEET together! 🚀
                     quiz["id"]
                 )
             
-            except Exception:
-                # Automatic scheduler must NEVER affect manual quizzes.
-                logger.exception(
-                    "Automatic quiz scheduler tick failed"
-                )
+        except Exception:
+            # Automatic scheduler must NEVER affect manual quizzes.
+            logger.exception(
+                "Automatic quiz scheduler tick failed"
+            )
 
     async def _broadcast_auto_quiz(
         self,
@@ -1365,7 +1365,7 @@ Let's ace NEET together! 🚀
                         correct_option=correct_option
                     )
                     
-                    clone_sent += ⁿ
+                    clone_sent += 1
                 
                 except Exception as exc:
                     logger.error(
@@ -7342,19 +7342,20 @@ Let's connect with Aman Directly, privately and securely!
             from telegram import Bot as TelegramBot
             test_bot = TelegramBot(token=token_text)
             bot_info = await test_bot.get_me()
+
+            # Never allow the main bot itself to become a clone.
+            if bot_info.id == MAIN_BOT_ID:
+                await db.clear_clone_pending(user.id)
+                await message.reply_text(
+                    "❌ Main bot cannot be registered as a clone bot."
+                )
+
+                if ApplicationHandlerStop:
+                    raise ApplicationHandlerStop
+                return
+
+        except Exception:
             
-        # Never allow the main bot itself to become a clone.
-        if bot_info.id == MAIN_BOT_ID:
-            await db.clear_clone_pending(user.id)        
-            await message.reply_text(
-                "❌ Main bot cannot be registered as a clone bot."
-            )
-            
-            if ApplicationHandlerStop:
-                raise ApplicationHandlerStop                
-            return      
-            
-         except Exception:
             await message.reply_text(
                 "❌ **Invalid token!** Could not connect to Telegram with this token.\n\n"
                 "Please make sure you copied the full token correctly and try again, or send /cancel.",
