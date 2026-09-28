@@ -1369,8 +1369,7 @@ Let's ace NEET together! 🚀
                 
                 except Exception as exc:
                     logger.error(
-                        "AUTO QUIZ clone send failed | "
-                        clone=%s | chat=%s | error=%s",
+                        "AUTO QUIZ clone send failed | clone=%s | chat=%s | error=%s",
                         clone_bot_id,
                         cgroup["id"],
                         exc
