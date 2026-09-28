@@ -77,6 +77,20 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required. Please set it with your bot token from @BotFather")
 ADMIN_GROUP_ID = -1003009412065
+# ============================================================
+# AUTO QUIZ SOURCE CHANNELS
+# ============================================================
+
+BIOLOGY_SOURCE_CHANNEL_ID = -1003677850351
+PHYSICS_SOURCE_CHANNEL_ID = -1003205377239
+CHEMISTRY_SOURCE_CHANNEL_ID = -1003545529979
+
+AUTO_QUIZ_SOURCE_CHANNELS = {
+    BIOLOGY_SOURCE_CHANNEL_ID: "biology",
+    CHEMISTRY_SOURCE_CHANNEL_ID: "chemistry",
+    PHYSICS_SOURCE_CHANNEL_ID: "physics",
+}
+
 TIMEZONE = pytz.timezone('Asia/Kolkata')
 OWNER_ID = 8147394357
 
@@ -657,10 +671,48 @@ Hello! To use this bot, you need to join our official groups/channels first.
             group=-2
         )
 
-        # Poll and quiz handlers
-        self.application.add_handler(MessageHandler(filters.POLL, self.handle_quiz))
-        self.application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, self.handle_reply_to_poll))
-        self.application.add_handler(PollAnswerHandler(self.handle_poll_answer))
+        # ============================================================
+        # AUTO QUIZ SOURCE CHANNEL CAPTURE
+        # ============================================================
+
+        self.application.add_handler(
+            MessageHandler(
+                filters.Chat(
+                    chat_id=[
+                        BIOLOGY_SOURCE_CHANNEL_ID,
+                        CHEMISTRY_SOURCE_CHANNEL_ID,
+                        PHYSICS_SOURCE_CHANNEL_ID,
+                    ]
+                )
+                & filters.POLL,
+                self.handle_auto_quiz_source
+            ),
+            group=-1
+        )
+
+        # ============================================================
+        # EXISTING MANUAL QUIZ SYSTEM
+        # ============================================================
+
+        self.application.add_handler(
+            MessageHandler(
+                filters.POLL,
+                self.handle_quiz
+            )
+        )
+
+        self.application.add_handler(
+            MessageHandler(
+                filters.TEXT & filters.REPLY,
+                self.handle_reply_to_poll
+            )
+        )
+
+        self.application.add_handler(
+            PollAnswerHandler(
+                self.handle_poll_answer
+            )
+        )        
         
         # Callback query handler
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
@@ -904,6 +956,12 @@ Let's ace NEET together! 🚀
     async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Automatically register any group or channel where the bot sees activity"""
         chat = update.effective_chat
+
+        # Auto-quiz source channels are INPUT ONLY.
+        # Never register them as normal quiz destinations.
+        if chat and chat.id in AUTO_QUIZ_SOURCE_CHANNELS:
+            return
+            
         if chat and chat.type in ["group", "supergroup", "channel"]:
             # Add to in-memory cache (works even if DB fails)
             self.groups_cache[chat.id] = {
@@ -915,7 +973,101 @@ Let's ace NEET together! 🚀
                 await db.add_group(chat.id, chat.title or "Unknown Group/Channel", chat.type, username=chat.username)
             except Exception as e:
                 logger.warning(f"Failed to add group/channel to database: {e}")
-    
+
+    async def handle_auto_quiz_source(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        """
+        Capture new quiz polls posted in the configured automatic
+        Biology, Chemistry and Physics source channels.
+
+        This handler ONLY stores quizzes.
+        It does not distribute them.
+        """
+
+        try:
+            message = update.effective_message
+            chat = update.effective_chat
+
+            if not message or not chat:
+                return
+
+            # Only our three explicitly configured source channels.
+            subject = AUTO_QUIZ_SOURCE_CHANNELS.get(chat.id)
+
+            if not subject:
+                return
+
+            poll = message.poll
+
+            if not poll:
+                return
+
+            # We only want Telegram QUIZ polls.
+            if poll.type != Poll.QUIZ:
+                logger.info(
+                    "Auto quiz source ignored non-quiz poll: "
+                    f"chat_id={chat.id}, message_id={message.message_id}"
+                )
+                return
+
+            if not poll.question or not poll.options:
+                logger.warning(
+                    "Auto quiz source received invalid quiz: "
+                    f"subject={subject}, "
+                    f"chat_id={chat.id}, "
+                    f"message_id={message.message_id}"
+                )
+                return
+
+            options = [
+                option.text
+                for option in poll.options
+            ]
+
+            correct_option_id = poll.correct_option_id
+
+            # Do not guess or manufacture an answer.
+            # Unknown answer => DB status will be PENDING.
+            saved_quiz = await db.save_auto_quiz(
+                subject=subject,
+                source_chat_id=chat.id,
+                source_message_id=message.message_id,
+                source_poll_id=poll.id,
+                question=poll.question,
+                options=options,
+                correct_option=correct_option_id
+            )
+
+            if saved_quiz["status"] == "ready":
+                logger.info(
+                    "AUTO QUIZ CAPTURED READY | "
+                    f"id={saved_quiz['id']} | "
+                    f"subject={subject} | "
+                    f"source_chat={chat.id} | "
+                    f"message_id={message.message_id} | "
+                    f"correct_option={saved_quiz['correct_option']}"
+                )
+
+            else:
+                logger.warning(
+                    "AUTO QUIZ CAPTURED PENDING | "
+                    f"id={saved_quiz['id']} | "
+                    f"subject={subject} | "
+                    f"source_chat={chat.id} | "
+                    f"message_id={message.message_id} | "
+                    "Telegram did not provide correct_option_id"
+                )
+
+        except Exception as e:
+            # Source capture failure must NEVER crash or disturb
+            # the existing manual quiz system.
+            logger.exception(
+                f"Auto quiz source capture failed: {e}"
+            )    
+        
     async def handle_quiz(
         self,
         update: Update,
