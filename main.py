@@ -6922,21 +6922,19 @@ Let's connect with Aman Directly, privately and securely!
             from telegram import Bot as TelegramBot
             test_bot = TelegramBot(token=token_text)
             bot_info = await test_bot.get_me()
-
+            
         # Never allow the main bot itself to become a clone.
         if bot_info.id == MAIN_BOT_ID:
-            await db.clear_clone_pending(user.id)
-        
+            await db.clear_clone_pending(user.id)        
             await message.reply_text(
                 "❌ Main bot cannot be registered as a clone bot."
             )
             
             if ApplicationHandlerStop:
-                raise ApplicationHandlerStop
-                
-            return
-        
-            except Exception:
+                raise ApplicationHandlerStop                
+            return      
+            
+         except Exception:
             await message.reply_text(
                 "❌ **Invalid token!** Could not connect to Telegram with this token.\n\n"
                 "Please make sure you copied the full token correctly and try again, or send /cancel.",
