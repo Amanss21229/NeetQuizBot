@@ -70,6 +70,7 @@ from urllib.parse import quote
 
 from private_ai import PrivateAI, ChatMessage
 from private_ai.gemini import GeminiProvider
+from auto_quiz_reader import auto_quiz_reader
 
 
 # Bot configuration
@@ -7157,6 +7158,26 @@ Let's connect with Aman Directly, privately and securely!
             # Start all active clone bots
             await clone_manager.start_all_clones()
 
+            # ========================================================
+            # AUTO QUIZ MTProto USER READER
+            # ========================================================
+            #
+            # This subsystem is intentionally failure-isolated.
+            # A Telegram user-session problem must NEVER stop:
+            # - main bot
+            # - clone bots
+            # - manual quiz system
+            # - Private AI
+            #
+            try:
+                await auto_quiz_reader.start()
+
+            except Exception as e:
+                logger.error(
+                    "Auto Quiz Reader unavailable: %s",
+                    e
+                )            
+
             # Start the main bot
             await self.application.initialize()
             await self.application.start()
@@ -7170,7 +7191,15 @@ Let's connect with Aman Directly, privately and securely!
         except Exception as e:
             logger.error(f"Bot error: {e}")
         finally:
-            # Cleanup
+            # Stop the isolated MTProto reader first.
+            try:
+                await auto_quiz_reader.stop()
+            except Exception:
+                logger.exception(
+                    "Failed to stop Auto Quiz Reader cleanly"
+                )
+
+            # Existing main bot cleanup.
             if self.application:
                 await self.application.stop()
 
