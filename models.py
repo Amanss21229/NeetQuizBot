@@ -2911,5 +2911,117 @@ class Database:
                 WHERE original_message_id = $1 AND original_chat_id = $2
             """, original_message_id, original_chat_id)
 
+    async def save_auto_quiz(
+        self,
+        subject: str,
+        source_chat_id: int,
+        source_message_id: int,
+        source_poll_id: str,
+        question: str,
+        options: list,
+        correct_option=None
+    ):
+        """
+        Save/update a quiz captured from an automatic source channel.
+
+        READY   = Telegram supplied a valid correct answer.
+        PENDING = correct answer is not known yet.
+
+        Duplicate channel messages are updated instead of inserted twice.
+        """
+
+        if not self.pool:
+            raise RuntimeError("Database pool not initialized")
+
+        subject = str(subject or "").strip().lower()
+
+        if subject not in {"biology", "chemistry", "physics"}:
+            raise ValueError(f"Invalid auto quiz subject: {subject}")
+
+        question = str(question or "").strip()
+
+        if not question:
+            raise ValueError("Auto quiz question cannot be empty")
+
+        clean_options = [
+            str(option).strip()
+            for option in (options or [])
+            if str(option).strip()
+        ]
+
+        if len(clean_options) < 2:
+            raise ValueError("Auto quiz must contain at least 2 options")
+
+        valid_correct_option = None
+
+        if correct_option is not None:
+            try:
+                candidate = int(correct_option)
+
+                if 0 <= candidate < len(clean_options):
+                    valid_correct_option = candidate
+
+            except (TypeError, ValueError):
+                valid_correct_option = None
+
+        status = (
+            "ready"
+            if valid_correct_option is not None
+            else "pending"
+        )
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO auto_quiz_bank (
+                    subject,
+                    source_chat_id,
+                    source_message_id,
+                    source_poll_id,
+                    question,
+                    options,
+                    correct_option,
+                    status,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6::jsonb,
+                    $7,
+                    $8,
+                    NOW()
+                )
+
+                ON CONFLICT (source_chat_id, source_message_id)
+                DO UPDATE SET
+                    subject = EXCLUDED.subject,
+                    source_poll_id = EXCLUDED.source_poll_id,
+                    question = EXCLUDED.question,
+                    options = EXCLUDED.options,
+                    correct_option = EXCLUDED.correct_option,
+                    status = EXCLUDED.status,
+                    updated_at = NOW()
+
+                RETURNING
+                    id,
+                    subject,
+                    status,
+                    correct_option
+            """,
+                subject,
+                int(source_chat_id),
+                int(source_message_id),
+                str(source_poll_id) if source_poll_id else None,
+                question,
+                json.dumps(clean_options),
+                valid_correct_option,
+                status
+            )
+
+            return dict(row)
+
 # Global database instance
 db = Database()
