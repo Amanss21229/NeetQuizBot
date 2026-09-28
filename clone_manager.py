@@ -392,19 +392,40 @@ class CloneBotManager:
                 pass
         logger.info(f"Clone bot {clone_bot_id} fully stopped.")
 
-    async def start_all_clones(self):
+    async def start_all_clones(self, exclude_bot_id: int = None):
         clones = await db.get_all_active_clone_bots()
+
         for clone in clones:
             try:
+                clone_bot_id = int(clone["bot_id"])
+             
+                # Critical safety guard:
+                # never start the main bot token as a clone.
+                if (
+                    exclude_bot_id is not None
+                    and clone_bot_id == int(exclude_bot_id)
+                ):
+                    logger.error(
+                        "Skipping invalid clone record because it matches "
+                        "the main bot ID: %s",
+                        clone_bot_id
+                    )
+                    continue
+                    
                 await self.start_clone(
-                    bot_token=clone['bot_token'],
-                    clone_bot_id=clone['bot_id'],
-                    owner_id=clone['owner_id'],
-                    bot_username=clone.get('bot_username'),
-                    bot_name=clone.get('bot_name')
+                    bot_token=clone["bot_token"],
+                    clone_bot_id=clone_bot_id,
+                    owner_id=clone["owner_id"],
+                    bot_username=clone.get("bot_username"),
+                    bot_name=clone.get("bot_name")
                 )
+            
             except Exception as e:
-                logger.error(f"Failed to start clone {clone['bot_id']}: {e}")
+                logger.error(
+                    "Failed to start clone %s: %s",
+                    clone.get("bot_id"),
+                    e
+                )    
 
     def get_all_instances(self) -> dict:
         return self.instances
