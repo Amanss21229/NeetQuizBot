@@ -980,7 +980,8 @@ Let's ace NEET together! 🚀
         context: ContextTypes.DEFAULT_TYPE
     ):
         """
-        IST schedule:
+        Automatic quiz schedule in Asia/Kolkata.
+
         09:00 BIO
         09:30 CHEM
         10:00 PHY
@@ -988,67 +989,87 @@ Let's ace NEET together! 🚀
         """
 
         try:
+            if not await db.is_auto_quiz_scheduler_enabled():
+                return
+
             now = datetime.now(TIMEZONE)
-            
+
             total_minutes = (
                 now.hour * 60
                 + now.minute
             )
-            
+
             start_minutes = 9 * 60
             end_minutes = 21 * 60 + 30
-            
+
             if (
                 total_minutes < start_minutes
-                or total_minutes > end_minutes
+                or total_minutes > end_minutes + 29
             ):
                 return
-                
-            elapsed = total_minutes - start_minutes
-            
-            # Only execute during the first minute of an exact
-            # 30-minute schedule slot.
-            if elapsed % 30 != 0:
+
+            elapsed = (
+                total_minutes
+                - start_minutes
+            )
+
+            slot_index = (
+                elapsed // 30
+            )
+
+            # 09:00 through 21:30 = 26 slots.
+            if (
+                slot_index < 0
+                or slot_index > 25
+            ):
                 return
-                
-            slot_index = elapsed // 30
-            
+
+            slot_minutes = (
+                start_minutes
+                + slot_index * 30
+            )
+
+            slot_hour, slot_minute = divmod(
+                slot_minutes,
+                60
+            )
+
             subjects = (
                 "biology",
                 "chemistry",
                 "physics"
             )
-            
+
             subject = subjects[
-                slot_index % len(subjects)
+                slot_index % 3
             ]
-            
+
             slot_key = (
                 f"{now.strftime('%Y-%m-%d')}-"
-                f"{now.strftime('%H:%M')}-"
+                f"{slot_hour:02d}:"
+                f"{slot_minute:02d}-"
                 f"{subject}"
             )
-            
+
             claimed = await db.claim_auto_quiz_slot(
                 slot_key=slot_key,
                 subject=subject
             )
-            
-            # Another scheduler tick/instance already owns it.
+
             if not claimed:
                 return
-                
+
             quiz = await db.select_auto_quiz(
                 subject=subject
             )
-            
+
             if not quiz:
                 await db.finish_auto_quiz_slot(
                     slot_key,
                     "skipped",
                     f"No READY {subject} quiz available"
                 )
-                
+
                 logger.warning(
                     "AUTO QUIZ SLOT SKIPPED | "
                     "slot=%s | subject=%s | "
@@ -1056,42 +1077,59 @@ Let's ace NEET together! 🚀
                     slot_key,
                     subject
                 )
+
                 return
-                
+
             await db.attach_auto_quiz_to_slot(
                 slot_key,
                 quiz["id"]
             )
-            
+
             try:
                 counts = await self._broadcast_auto_quiz(
                     context=context,
                     quiz=quiz
                 )
-                
+
+                delivered = (
+                    int(counts["main"])
+                    + int(counts["clones"])
+                )
+
+                if delivered <= 0:
+                    raise RuntimeError(
+                        "Quiz was not delivered "
+                        "to any destination"
+                    )
+
+                await db.mark_auto_quiz_sent(
+                    quiz_id=quiz["id"],
+                    cycle=quiz["selected_cycle"]
+                )
+
                 await db.finish_auto_quiz_slot(
                     slot_key,
                     "sent"
                 )
-                
+
                 logger.info(
-                    "AUTO QUIZ SENT | slot=%s | "
-                    "subject=%s | quiz_id=%s | "
-                    "main=%s | clones=%s",
+                    "AUTO QUIZ SENT | "
+                    "slot=%s | subject=%s | "
+                    "quiz_id=%s | main=%s | clones=%s",
                     slot_key,
                     subject,
                     quiz["id"],
                     counts["main"],
                     counts["clones"]
                 )
-            
+
             except Exception as exc:
                 await db.finish_auto_quiz_slot(
                     slot_key,
                     "failed",
                     str(exc)
                 )
-                
+
                 logger.exception(
                     "AUTO QUIZ SLOT FAILED | "
                     "slot=%s | subject=%s | quiz_id=%s",
@@ -1099,7 +1137,7 @@ Let's ace NEET together! 🚀
                     subject,
                     quiz["id"]
                 )
-            
+
         except Exception:
             # Automatic scheduler must NEVER affect manual quizzes.
             logger.exception(
@@ -1111,103 +1149,138 @@ Let's ace NEET together! 🚀
         context: ContextTypes.DEFAULT_TYPE,
         quiz: dict
     ):
-        question = str(quiz["question"])
-        options = list(quiz["options"])
+        question = str(
+            quiz["question"]
+        )
+
+        raw_options = quiz["options"]
+
+        if isinstance(raw_options, str):
+            raw_options = json.loads(
+                raw_options
+            )
+
+        options = list(raw_options)
+
         correct_option = int(
             quiz["correct_option"]
         )
-        
-        auto_quiz_id = int(quiz["id"])
-        
+
+        auto_quiz_id = int(
+            quiz["id"]
+        )
+
         if not (
             0 <= correct_option < len(options)
         ):
             raise ValueError(
                 "Automatic quiz has invalid correct_option"
             )
-            
+
+        # Use a REAL quizzes.id.
+        # Existing scoring system remains unchanged.
+        scoring_quiz_id = (
+            await db.get_or_create_auto_quiz_scoring_id(
+                auto_quiz_id
+            )
+        )
+
         main_sent = 0
         clone_sent = 0
 
-        # -------------------------
+        # ==================================================
         # MAIN BOT DESTINATIONS
-        # -------------------------
+        # ==================================================
 
         all_chats = await db.get_all_groups()
-        
+
         for chat in all_chats:
-            
+
             if chat["id"] == ADMIN_GROUP_ID:
                 continue
-                
-            # Source channels are input-only.
+
+            # Source channels are INPUT ONLY.
             if chat["id"] in AUTO_QUIZ_SOURCE_CHANNELS:
                 continue
-                
+
             try:
                 quiz_question = question
                 quiz_options = options
-                
-                chat_language = await db.get_group_language(
-                    chat["id"]
+
+                chat_language = (
+                    await db.get_group_language(
+                        chat["id"]
+                    )
                 )
-                
+
                 if chat_language == "hindi":
+
                     cache_key = (
                         f"auto_{auto_quiz_id}",
                         "hindi"
                     )
-                    
+
                     if cache_key in self.translation_cache:
-                        cached = self.translation_cache[
-                            cache_key
-                        ]
-                        
+
+                        cached = (
+                            self.translation_cache[
+                                cache_key
+                            ]
+                        )
+
                         quiz_question = cached[
                             "question"
                         ]
+
                         quiz_options = cached[
                             "options"
                         ]
-                    
+
                     else:
                         try:
                             translator = GoogleTranslator(
                                 source="auto",
                                 target="hi"
                             )
-                            
+
                             quiz_question = (
-                                translator.translate(question)
+                                translator.translate(
+                                    question
+                                )
                             )
-                            
+
                             quiz_options = [
-                                translator.translate(option)
+                                translator.translate(
+                                    option
+                                )
                                 for option in options
                             ]
-                            
+
                             self.translation_cache[
                                 cache_key
                             ] = {
-                                "question": quiz_question,
-                                "options": quiz_options
+                                "question":
+                                    quiz_question,
+                                "options":
+                                    quiz_options
                             }
-                        
+
                         except Exception as exc:
+
                             logger.warning(
-                                "Auto quiz translation failed "
-                                "for chat %s: %s",
+                                "Auto quiz translation "
+                                "failed for chat %s: %s",
                                 chat["id"],
                                 exc
                             )
-                            
+
                             quiz_question = question
                             quiz_options = options
-                            
+
                 quiz_question += (
                     "\n\n【~@DrQuizRobot】"
                 )
-                
+
                 sent = await context.bot.send_poll(
                     chat_id=chat["id"],
                     question=quiz_question,
@@ -1218,31 +1291,48 @@ Let's ace NEET together! 🚀
                     explanation="📚 NEET Quiz Bot"
                 )
 
-                # Existing answer-tracking system can use a
-                # synthetic negative quiz ID without touching
-                # manual quiz records.
-                tracking_id = -auto_quiz_id
-            
-                self.quiz_data[tracking_id] = {
-                    "correct_option": correct_option,
-                    "question": question,
-                    "options": options,
-                    "message_id": None,
-                    "poll_object": sent.poll
+                # Existing scoring engine gets a real quiz ID.
+                self.quiz_data[
+                    scoring_quiz_id
+                ] = {
+                    "correct_option":
+                        correct_option,
+                    "question":
+                        question,
+                    "options":
+                        options,
+                    "message_id":
+                        None,
+                    "poll_object":
+                        sent.poll
                 }
-            
-                self.poll_mapping[sent.poll.id] = {
-                    "quiz_id": tracking_id,
-                    "group_id": chat["id"],
-                    "message_id": sent.message_id
+
+                self.poll_mapping[
+                    sent.poll.id
+                ] = {
+                    "quiz_id":
+                        scoring_quiz_id,
+                    "group_id":
+                        chat["id"],
+                    "message_id":
+                        sent.message_id
                 }
-            
-                if chat.get("type") != "channel":
-                    main_sent += 1
-                else:
-                    main_sent += 1
-                    
+
+                # Persist mapping so a Render restart
+                # does not lose this automatic poll.
+                await db.add_poll_mapping(
+                    poll_id=sent.poll.id,
+                    quiz_id=scoring_quiz_id,
+                    group_id=chat["id"],
+                    message_id=sent.message_id,
+                    clone_bot_id=0,
+                    correct_option=correct_option
+                )
+
+                main_sent += 1
+
             except Exception as exc:
+
                 logger.error(
                     "AUTO QUIZ main send failed | "
                     "chat=%s | error=%s",
@@ -1250,91 +1340,101 @@ Let's ace NEET together! 🚀
                     exc
                 )
 
-        # -------------------------
+        # ==================================================
         # CLONE BOT DESTINATIONS
-        # -------------------------
+        # ==================================================
 
         for clone_bot_id, instance in (
-            clone_manager.get_all_instances().items()
+            clone_manager
+            .get_all_instances()
+            .items()
         ):
+
             if not instance.application:
                 continue
-                
+
             clone_info = await db.get_clone_bot(
                 clone_bot_id
             )
-            
+
             if (
                 clone_info
                 and clone_info.get("is_paused")
             ):
                 continue
-                
+
             clone_groups = await db.get_clone_groups(
                 clone_bot_id
             )
-            
+
             for cgroup in clone_groups:
+
                 try:
                     c_question = question
                     c_options = options
-                    
-                    clone_lang = await db.get_group_language(
-                        cgroup["id"]
+
+                    clone_lang = (
+                        await db.get_group_language(
+                            cgroup["id"]
+                        )
                     )
-                    
+
                     if clone_lang == "hindi":
+
                         cache_key = (
                             f"auto_{auto_quiz_id}",
                             "hindi"
                         )
-                        
+
                         if cache_key in self.translation_cache:
+
                             cached = (
                                 self.translation_cache[
                                     cache_key
                                 ]
                             )
-                            
+
                             c_question = cached[
                                 "question"
                             ]
-                            
+
                             c_options = cached[
                                 "options"
                             ]
-                        
+
                         else:
                             try:
                                 translator = GoogleTranslator(
                                     source="auto",
                                     target="hi"
                                 )
-                                
+
                                 c_question = (
                                     translator.translate(
                                         question
                                     )
                                 )
-                                
+
                                 c_options = [
                                     translator.translate(
                                         option
-                                    )                                    
+                                    )
                                     for option in options
                                 ]
-                                
+
                                 self.translation_cache[
                                     cache_key
                                 ] = {
-                                    "question": c_question,
-                                    "options": c_options
+                                    "question":
+                                        c_question,
+                                    "options":
+                                        c_options
                                 }
-                            
+
                             except Exception:
                                 c_question = question
                                 c_options = options
-                                
+
                     c_question += (
                         "\n\n【~@"
                         + (
@@ -1343,7 +1443,7 @@ Let's ace NEET together! 🚀
                         )
                         + "】"
                     )
-                    
+
                     c_sent = (
                         await instance.application.bot.send_poll(
                             chat_id=cgroup["id"],
@@ -1355,31 +1455,33 @@ Let's ace NEET together! 🚀
                             explanation="📚 Quiz Bot"
                         )
                     )
-                    
+
                     await db.add_poll_mapping(
                         poll_id=c_sent.poll.id,
-                        quiz_id=-auto_quiz_id,
+                        quiz_id=scoring_quiz_id,
                         group_id=cgroup["id"],
                         message_id=c_sent.message_id,
                         clone_bot_id=clone_bot_id,
                         correct_option=correct_option
                     )
-                    
+
                     clone_sent += 1
-                
+
                 except Exception as exc:
+
                     logger.error(
-                        "AUTO QUIZ clone send failed | clone=%s | chat=%s | error=%s",
+                        "AUTO QUIIZ clone send failed | "
+                        "clone=%s | chat=%s | error=%s",
                         clone_bot_id,
                         cgroup["id"],
                         exc
                     )
-                    
+
         return {
             "main": main_sent,
             "clones": clone_sent
-        }
-                    
+        } 
+    
     async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Automatically register any group or channel where the bot sees activity"""
         chat = update.effective_chat
@@ -2240,21 +2342,68 @@ Let's ace NEET together! 🚀
         user = poll_answer.user
         poll_id = poll_answer.poll_id
         selected_options = poll_answer.option_ids
-        
-        # Get poll mapping data
-        if poll_id not in self.poll_mapping:
-            return
-        
-        poll_data = self.poll_mapping[poll_id]
-        quiz_id = poll_data['quiz_id']
-        group_id = poll_data['group_id']
-        
-        # Get quiz data
-        if quiz_id not in self.quiz_data:
-            return
-        
-        quiz_data = self.quiz_data[quiz_id]
-        correct_option = quiz_data['correct_option']
+
+        # First use existing in-memory mapping.
+        # Automatic main-bot polls also have a persistent
+        # DB mapping so scoring survives Render restarts.
+        poll_data = self.poll_mapping.get(
+            poll_id
+        )
+
+        if poll_data:
+
+            quiz_id = poll_data[
+                "quiz_id"
+            ]
+
+            group_id = poll_data[
+                "group_id"
+            ]
+
+            quiz_data = self.quiz_data.get(
+                quiz_id
+            )
+
+            if not quiz_data:
+                return
+
+            correct_option = quiz_data[
+                "correct_option"
+            ]
+
+        else:
+
+            poll_data = await db.get_poll_mapping(
+                poll_id
+            )
+
+            if not poll_data:
+                return
+
+            # clone_bot_id=0 is reserved only for
+            # automatic polls sent by the MAIN bot.
+            #
+            # Clone answers continue through the
+            # existing clone answer handler.
+            if poll_data.get(
+                "clone_bot_id"
+            ) not in (
+                0,
+                None
+            ):
+                return
+
+            quiz_id = poll_data[
+                "quiz_id"
+            ]
+
+            group_id = poll_data[
+                "group_id"
+            ]
+
+            correct_option = poll_data[
+                "correct_option"
+            ]        
         
         # Determine points
         if len(selected_options) == 0:
