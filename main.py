@@ -6936,7 +6936,7 @@ Let's connect with Aman Directly, privately and securely!
                 
             return
         
-        except Exception:
+            except Exception:
             await message.reply_text(
                 "❌ **Invalid token!** Could not connect to Telegram with this token.\n\n"
                 "Please make sure you copied the full token correctly and try again, or send /cancel.",
