@@ -77,6 +77,12 @@ from auto_quiz_reader import auto_quiz_reader
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required. Please set it with your bot token from @BotFather")
+
+try:
+    MAIN_BOT_ID = int(BOT_TOKEN.split(":", 1)[0])
+except (ValueError, IndexError):
+    raise ValueError("BOT_TOKEN has invalid format")
+    
 ADMIN_GROUP_ID = -1003009412065
 # ============================================================
 # AUTO QUIZ SOURCE CHANNELS
@@ -6916,6 +6922,20 @@ Let's connect with Aman Directly, privately and securely!
             from telegram import Bot as TelegramBot
             test_bot = TelegramBot(token=token_text)
             bot_info = await test_bot.get_me()
+
+        # Never allow the main bot itself to become a clone.
+    if bot_info.id == MAIN_BOT_ID:
+        await db.clear_clone_pending(user.id)
+        
+        await message.reply_text(
+            "❌ Main bot cannot be registered as a clone bot."
+        )
+        
+        if ApplicationHandlerStop:
+            raise ApplicationHandlerStop
+            
+        return
+        
         except Exception:
             await message.reply_text(
                 "❌ **Invalid token!** Could not connect to Telegram with this token.\n\n"
