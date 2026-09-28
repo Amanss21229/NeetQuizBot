@@ -556,6 +556,77 @@ class Database:
                 WHERE status = 'ready'
             """)
 
+            # ============================================================
+            # AUTO QUIZ NO-REPEAT + RELIABLE SLOT STATE
+            # ============================================================
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS auto_quiz_subject_state (
+                    subject TEXT PRIMARY KEY
+                        CHECK (
+                            subject IN (
+                                'biology',
+                                'chemistry',
+                                'physics'
+                            )
+                        ),
+
+                    current_cycle INTEGER NOT NULL DEFAULT 1,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            await conn.execute("""
+                INSERT INTO auto_quiz_subject_state (
+                    subject,
+                    current_cycle
+                )
+                VALUES
+                    ('biology', 1),
+                    ('chemistry', 1),
+                    ('physics', 1)
+                ON CONFLICT (subject) DO NOTHING
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS auto_quiz_runs (
+                    slot_key TEXT PRIMARY KEY,
+
+                    subject TEXT NOT NULL
+                        CHECK (
+                            subject IN (
+                                'biology',
+                                'chemistry',
+                                'physics'
+                            )
+                        ),
+                    
+                    quiz_id BIGINT NULL
+                        REFERENCES auto_quiz_bank(id)
+                        ON DELETE SET NULL,
+
+                    status TEXT NOT NULL DEFAULT 'claimed'
+                        CHECK ( 
+                            status IN (
+                                'claimed',
+                                'sent',
+                                'failed',
+                                'skipped'
+                            )
+                        ),
+                        
+                    error_text TEXT NULL,
+                    claimed_at TIMESTAMP DEFAULT NOW(),
+                    completed_at TIMESTAMP NULL,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_auto_quiz_runs_status
+                ON auto_quiz_runs(status, claimed_at)
+            """)
+
             # Fast source-poll lookup when Telegram sends poll updates.
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_auto_quiz_bank_poll
@@ -2921,6 +2992,232 @@ class Database:
         options: list,
         correct_option=None
     ):
+
+    async def mark_auto_quiz_ready(
+    self,
+    source_chat_id: int,
+    source_message_id: int,
+    correct_option: int
+):
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    async with self.pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            UPDATE auto_quiz_bank
+            SET
+                correct_option = $3,
+                status = 'ready',
+                updated_at = NOW()
+            WHERE
+                source_chat_id = $1
+                AND source_message_id = $2
+                AND $3 >= 0
+                AND $3 < jsonb_array_length(options)
+                AND status != 'disabled'
+            RETURNING
+                id,
+                subject,
+                correct_option,
+                status
+        """,
+            int(source_chat_id),
+            int(source_message_id),
+            int(correct_option)
+        )
+
+        return dict(row) if row else None
+
+
+async def claim_auto_quiz_slot(
+    self,
+    slot_key: str,
+    subject: str
+) -> bool:
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    async with self.pool.acquire() as conn:
+        result = await conn.execute("""
+            INSERT INTO auto_quiz_runs (
+                slot_key,
+                subject,
+                status
+            )
+            VALUES ($1, $2, 'claimed')
+            ON CONFLICT (slot_key) DO NOTHING
+        """, slot_key, subject)
+
+        return result == "INSERT 0 1"
+
+
+async def select_auto_quiz(
+    self,
+    subject: str
+):
+    """
+    Random READY quiz with no repeats inside a subject cycle.
+
+    Once every READY quiz in a subject has been used,
+    that subject automatically starts a new cycle.
+    """
+
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    async with self.pool.acquire() as conn:
+        async with conn.transaction():
+
+            state = await conn.fetchrow("""
+                SELECT current_cycle
+                FROM auto_quiz_subject_state
+                WHERE subject = $1
+                FOR UPDATE
+            """, subject)
+
+            if not state:
+                await conn.execute("""
+                    INSERT INTO auto_quiz_subject_state (
+                        subject,
+                        current_cycle
+                    )
+                    VALUES ($1, 1)
+                    ON CONFLICT (subject) DO NOTHING
+                """, subject)
+
+                current_cycle = 1
+            else:
+                current_cycle = int(
+                    state["current_cycle"]
+                )
+
+            row = await conn.fetchrow("""
+                SELECT *
+                FROM auto_quiz_bank
+                WHERE
+                    subject = $1
+                    AND status = 'ready'
+                    AND correct_option IS NOT NULL
+                    AND last_sent_cycle < $2
+                ORDER BY RANDOM()
+                LIMIT 1
+                FOR UPDATE
+            """, subject, current_cycle)
+
+            if not row:
+                ready_count = await conn.fetchval("""
+                    SELECT COUNT(*)
+                    FROM auto_quiz_bank
+                    WHERE
+                        subject = $1
+                        AND status = 'ready'
+                        AND correct_option IS NOT NULL
+                """, subject)
+
+                if not ready_count:
+                    return None
+
+                current_cycle += 1
+
+                await conn.execute("""
+                    UPDATE auto_quiz_subject_state
+                    SET
+                        current_cycle = $2,
+                        updated_at = NOW()
+                    WHERE subject = $1
+                """, subject, current_cycle)
+
+                row = await conn.fetchrow("""
+                    SELECT *
+                    FROM auto_quiz_bank
+                    WHERE
+                        subject = $1
+                        AND status = 'ready'
+                        AND correct_option IS NOT NULL
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                    FOR UPDATE
+                """, subject)
+
+            if not row:
+                return None
+
+            await conn.execute("""
+                UPDATE auto_quiz_bank
+                SET
+                    last_sent_cycle = $2,
+                    cycle_number = $2,
+                    total_times_sent =
+                        total_times_sent + 1,
+                    last_sent_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+            """,
+                row["id"],
+                current_cycle
+            )
+
+            result = dict(row)
+            result["selected_cycle"] = current_cycle
+
+            return result
+
+
+async def attach_auto_quiz_to_slot(
+    self,
+    slot_key: str,
+    quiz_id: int
+):
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    async with self.pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE auto_quiz_runs
+            SET
+                quiz_id = $2,
+                updated_at = NOW()
+            WHERE slot_key = $1
+        """, slot_key, quiz_id)
+
+
+async def finish_auto_quiz_slot(
+    self,
+    slot_key: str,
+    status: str,
+    error_text=None
+):
+    if status not in {
+        "sent",
+        "failed",
+        "skipped"
+    }:
+        raise ValueError(
+            "Invalid auto quiz slot status"
+        )
+
+    if not self.pool:
+        raise RuntimeError("Database pool not initialized")
+
+    async with self.pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE auto_quiz_runs
+            SET
+                status = $2,
+                error_text = $3,
+                completed_at = NOW(),
+                updated_at = NOW()
+            WHERE slot_key = $1
+        """,
+            slot_key,
+            status,
+            (
+                str(error_text)[:1000]
+                if error_text
+                else None
+            )
+        )
+        
         """
         Save/update a quiz captured from an automatic source channel.
 
@@ -3001,8 +3298,17 @@ class Database:
                     source_poll_id = EXCLUDED.source_poll_id,
                     question = EXCLUDED.question,
                     options = EXCLUDED.options,
-                    correct_option = EXCLUDED.correct_option,
-                    status = EXCLUDED.status,
+                correct_option = COALESCE(
+                    EXCLUDED.correct_option,
+                    auto_quiz_bank.correct_option
+                ),
+                status = CASE
+                    WHEN EXCLUDED.correct_option IS NOT NULL
+                         OR auto_quiz_bank.correct_option IS NOT NULL
+                    THEN 'ready'
+                    ELSE 'pending'
+                    END,
+                    
                     updated_at = NOW()
 
                 RETURNING
