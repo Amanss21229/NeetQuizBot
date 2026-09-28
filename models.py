@@ -452,6 +452,116 @@ class Database:
                 ON ai_tasks(next_run_at)
                 WHERE active = TRUE
             """)
+
+            # ============================================================
+            # AUTO QUIZ SOURCE BANK
+            # ============================================================
+
+            # Stores quiz polls captured from Biology/Chemistry/Physics
+            # source channels. This table is completely independent from
+            # the existing manual quiz system.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS auto_quiz_bank (
+                    id BIGSERIAL PRIMARY KEY,
+
+                    subject TEXT NOT NULL
+                        CHECK (subject IN ('biology', 'chemistry', 'physics')),
+
+                    source_chat_id BIGINT NOT NULL,
+                    source_message_id BIGINT NOT NULL,
+                    source_poll_id TEXT,
+
+                    question TEXT NOT NULL,
+                    options JSONB NOT NULL,
+
+                    correct_option INTEGER NULL,
+
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN (
+                            'pending',
+                            'ready',
+                            'disabled'
+                        )),
+
+                    cycle_number INTEGER NOT NULL DEFAULT 1,
+                    last_sent_cycle INTEGER NOT NULL DEFAULT 0,
+
+                    total_times_sent BIGINT NOT NULL DEFAULT 0,
+                    last_sent_at TIMESTAMP NULL,
+
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+
+                    UNIQUE(source_chat_id, source_message_id)
+                )
+            """)
+
+            # Stores persistent scheduler state.
+            # This survives Render restarts/redeployments.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS auto_quiz_scheduler_state (
+                    id SMALLINT PRIMARY KEY DEFAULT 1,
+
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
+                    current_subject TEXT NOT NULL DEFAULT 'biology'
+                        CHECK (
+                            current_subject IN (
+                                'biology',
+                                'chemistry',
+                                'physics'
+                            )
+                        ),
+
+                    last_slot_key TEXT NULL,
+                    last_run_at TIMESTAMP NULL,
+
+                    updated_at TIMESTAMP DEFAULT NOW(),
+
+                    CONSTRAINT auto_quiz_scheduler_single_row
+                        CHECK (id = 1)
+                )
+            """)
+
+            # Always ensure the scheduler has exactly its default state row.
+            await conn.execute("""
+                INSERT INTO auto_quiz_scheduler_state (
+                    id,
+                    enabled,
+                    current_subject
+                )
+                VALUES (
+                    1,
+                    TRUE,
+                    'biology'
+                )
+                ON CONFLICT (id) DO NOTHING
+            """)
+
+            # Fast lookup for random READY quizzes of a subject.
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_auto_quiz_bank_subject_ready
+                ON auto_quiz_bank(subject, status)
+                WHERE status = 'ready'
+            """)
+
+            # Helps the no-repeat cycle selector.
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_auto_quiz_bank_cycle
+                ON auto_quiz_bank(
+                    subject,
+                    cycle_number,
+                    last_sent_cycle
+                )
+                WHERE status = 'ready'
+            """)
+
+            # Fast source-poll lookup when Telegram sends poll updates.
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_auto_quiz_bank_poll
+                ON auto_quiz_bank(source_poll_id)
+                WHERE source_poll_id IS NOT NULL
+            """)    
     
     async def add_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, clone_bot_id: Optional[int] = None):
         """Add or update user in database"""
