@@ -6924,17 +6924,17 @@ Let's connect with Aman Directly, privately and securely!
             bot_info = await test_bot.get_me()
 
         # Never allow the main bot itself to become a clone.
-    if bot_info.id == MAIN_BOT_ID:
-        await db.clear_clone_pending(user.id)
+        if bot_info.id == MAIN_BOT_ID:
+            await db.clear_clone_pending(user.id)
         
-        await message.reply_text(
-            "❌ Main bot cannot be registered as a clone bot."
-        )
-        
-        if ApplicationHandlerStop:
-            raise ApplicationHandlerStop
+            await message.reply_text(
+                "❌ Main bot cannot be registered as a clone bot."
+            )
             
-        return
+            if ApplicationHandlerStop:
+                raise ApplicationHandlerStop
+                
+            return
         
         except Exception:
             await message.reply_text(
@@ -7176,7 +7176,9 @@ Let's connect with Aman Directly, privately and securely!
             await self.initialize()
 
             # Start all active clone bots
-            await clone_manager.start_all_clones()
+            await clone_manager.start_all_clones(
+                exclude_bot_id=MAIN_BOT_ID
+            )
 
             # ========================================================
             # AUTO QUIZ MTProto USER READER
