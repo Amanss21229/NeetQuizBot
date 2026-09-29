@@ -511,6 +511,7 @@ class Database:
                     last_owner_message_at TIMESTAMP,
                     last_auto_reply_at TIMESTAMP,
                     last_urgent_reply_at TIMESTAMP,
+                    
                     conversation_started_at TIMESTAMP,
                     offline_reply_stage SMALLINT NOT NULL DEFAULT 0,
 
@@ -518,6 +519,17 @@ class Database:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+
+            await conn.execute("""
+                ALTER TABLE aira_users
+                ADD COLUMN IF NOT EXISTS conversation_started_at TIMESTAMP
+            """)
+
+            await conn.execute("""
+                ALTER TABLE aira_users
+                ADD COLUMN IF NOT EXISTS offline_reply_stage SMALLINT
+                NOT NULL DEFAULT 0
+            """)        
 
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_aira_users_topic
