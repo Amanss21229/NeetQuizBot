@@ -44,6 +44,11 @@ class AutoQuizReader:
         self.client: Optional[TelegramClient] = None
         self.started = False
         self._processing = set()
+        
+        # AIRA Phase 2
+        # Telegram user account connected through TG_USER_SESSION.
+        # Used only to prevent self/Saved Messages processing.
+        self.telegram_user_id: Optional[int] = None
 
     @staticmethod
     def _normalize_session_string(value: str) -> str:
