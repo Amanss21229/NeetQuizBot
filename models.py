@@ -511,6 +511,8 @@ class Database:
                     last_owner_message_at TIMESTAMP,
                     last_auto_reply_at TIMESTAMP,
                     last_urgent_reply_at TIMESTAMP,
+                    conversation_started_at TIMESTAMP,
+                    offline_reply_stage SMALLINT NOT NULL DEFAULT 0,
 
                     first_seen_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
@@ -3854,6 +3856,63 @@ class Database:
                 bool(urgent_reply)
             )
 
+    async def set_aira_conversation_state(
+        self,
+        user_id: int,
+        *,
+        offline_reply_stage: Optional[int] = None,
+        reset_conversation: bool = False
+    ):
+        """
+        Update AIRA-only conversation state.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO aira_users (
+                    user_id,
+                    conversation_started_at,
+                    offline_reply_stage,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    NOW(),
+                    COALESCE($2, 0),
+                    NOW()
+                )
+
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+
+                    conversation_started_at =
+                        CASE
+                            WHEN $3
+                            THEN NOW()
+                            ELSE COALESCE(
+                                aira_users.conversation_started_at,
+                                NOW()
+                            )
+                        END,
+
+                    offline_reply_stage =
+                        CASE
+                            WHEN $2::INTEGER IS NOT NULL
+                            THEN $2
+                            ELSE aira_users.offline_reply_stage
+                        END,
+
+                    updated_at = NOW()
+            """,
+                int(user_id),
+                offline_reply_stage,
+                bool(reset_conversation)
+            )
 
     async def save_aira_topic(
         self,
