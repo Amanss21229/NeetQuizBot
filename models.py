@@ -454,6 +454,81 @@ class Database:
             """)
 
             # ============================================================
+            # AIRA — OWNER PERSONAL ASSISTANT
+            # ============================================================
+            #
+            # Completely isolated from:
+            # - Private AI
+            # - ai_activity
+            # - Manual quiz system
+            # - Auto Quiz system
+            # - Clone bots
+            #
+            # Phase 1 only creates persistent state.
+            # No personal messages are processed here.
+            # ============================================================
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS aira_settings (
+                    id SMALLINT PRIMARY KEY DEFAULT 1,
+                    mode TEXT NOT NULL DEFAULT 'online'
+                        CHECK (mode IN ('online', 'offline')),
+                    updated_by BIGINT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+
+                    CONSTRAINT aira_settings_single_row
+                        CHECK (id = 1)
+                )
+            """)
+
+            # Always guarantee exactly one settings row.
+            # Existing mode is NEVER overwritten on restart.
+            await conn.execute("""
+                INSERT INTO aira_settings (
+                    id,
+                    mode
+                )
+                VALUES (
+                    1,
+                    'online'
+                )
+                ON CONFLICT (id) DO NOTHING
+            """)
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS aira_users (
+                    user_id BIGINT PRIMARY KEY,
+
+                    first_name TEXT,
+                    last_name TEXT,
+                    username TEXT,
+
+                    topic_id BIGINT,
+                    topic_name TEXT,
+
+                    last_incoming_at TIMESTAMP,
+                    last_owner_message_at TIMESTAMP,
+                    last_auto_reply_at TIMESTAMP,
+                    last_urgent_reply_at TIMESTAMP,
+
+                    first_seen_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_aira_users_topic
+                ON aira_users(topic_id)
+                WHERE topic_id IS NOT NULL
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_aira_users_last_incoming
+                ON aira_users(last_incoming_at DESC)
+            """)            
+
+            # ============================================================
             # AUTO QUIZ SOURCE BANK
             # ============================================================
 
@@ -3528,6 +3603,300 @@ class Database:
                     else None
                 )
             )
+
+    # ================================================================
+    # AIRA — OWNER PERSONAL ASSISTANT
+    # ================================================================
+
+    async def get_aira_mode(self) -> str:
+        """
+        Return persistent AIRA mode.
+
+        Possible values:
+        - online
+        - offline
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            mode = await conn.fetchval("""
+                SELECT mode
+                FROM aira_settings
+                WHERE id = 1
+            """)
+
+            return (
+                str(mode).lower()
+                if mode
+                else "online"
+            )
+
+
+    async def set_aira_mode(
+        self,
+        mode: str,
+        updated_by: int
+    ) -> str:
+        """
+        Persist AIRA online/offline mode.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        clean_mode = str(
+            mode or ""
+        ).strip().lower()
+
+        if clean_mode not in {
+            "online",
+            "offline"
+        }:
+            raise ValueError(
+                "AIRA mode must be online or offline"
+            )
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO aira_settings (
+                    id,
+                    mode,
+                    updated_by,
+                    updated_at
+                )
+                VALUES (
+                    1,
+                    $1,
+                    $2,
+                    NOW()
+                )
+
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    mode = EXCLUDED.mode,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = NOW()
+            """,
+                clean_mode,
+                int(updated_by)
+            )
+
+        return clean_mode
+
+
+    async def get_aira_user(
+        self,
+        user_id: int
+    ) -> Optional[Dict]:
+        """
+        Get one personal-DM user's persistent AIRA state.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT *
+                FROM aira_users
+                WHERE user_id = $1
+            """,
+                int(user_id)
+            )
+
+            return dict(row) if row else None
+
+
+    async def upsert_aira_user(
+        self,
+        user_id: int,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        username: Optional[str] = None
+    ) -> Dict:
+        """
+        Create/update basic Telegram identity.
+
+        Existing activity timestamps and topic mapping
+        are preserved.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO aira_users (
+                    user_id,
+                    first_name,
+                    last_name,
+                    username,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    NOW()
+                )
+
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    first_name = EXCLUDED.first_name,
+                    last_name = EXCLUDED.last_name,
+                    username = EXCLUDED.username,
+                    updated_at = NOW()
+
+                RETURNING *
+            """,
+                int(user_id),
+                first_name,
+                last_name,
+                username
+            )
+
+            return dict(row)
+
+
+    async def update_aira_user_activity(
+        self,
+        user_id: int,
+        *,
+        incoming: bool = False,
+        owner_message: bool = False,
+        auto_reply: bool = False,
+        urgent_reply: bool = False
+    ):
+        """
+        Update only requested AIRA timestamps.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        if not any((
+            incoming,
+            owner_message,
+            auto_reply,
+            urgent_reply
+        )):
+            return
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO aira_users (
+                    user_id,
+                    last_incoming_at,
+                    last_owner_message_at,
+                    last_auto_reply_at,
+                    last_urgent_reply_at,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    CASE WHEN $2 THEN NOW() ELSE NULL END,
+                    CASE WHEN $3 THEN NOW() ELSE NULL END,
+                    CASE WHEN $4 THEN NOW() ELSE NULL END,
+                    CASE WHEN $5 THEN NOW() ELSE NULL END,
+                    NOW()
+                )
+
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+
+                    last_incoming_at =
+                        CASE
+                            WHEN $2
+                            THEN NOW()
+                            ELSE aira_users.last_incoming_at
+                        END,
+
+                    last_owner_message_at =
+                        CASE
+                            WHEN $3
+                            THEN NOW()
+                            ELSE aira_users.last_owner_message_at
+                        END,
+
+                    last_auto_reply_at =
+                        CASE
+                            WHEN $4
+                            THEN NOW()
+                            ELSE aira_users.last_auto_reply_at
+                        END,
+
+                    last_urgent_reply_at =
+                        CASE
+                            WHEN $5
+                            THEN NOW()
+                            ELSE aira_users.last_urgent_reply_at
+                        END,
+
+                    updated_at = NOW()
+            """,
+                int(user_id),
+                bool(incoming),
+                bool(owner_message),
+                bool(auto_reply),
+                bool(urgent_reply)
+            )
+
+
+    async def save_aira_topic(
+        self,
+        user_id: int,
+        topic_id: int,
+        topic_name: str
+    ):
+        """
+        Persist the private AIRA Inbox topic mapping.
+
+        Phase 4 will use this.
+        """
+
+        if not self.pool:
+            raise RuntimeError(
+                "Database pool not initialized"
+            )
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO aira_users (
+                    user_id,
+                    topic_id,
+                    topic_name,
+                    updated_at
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    NOW()
+                )
+
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    topic_id = EXCLUDED.topic_id,
+                    topic_name = EXCLUDED.topic_name,
+                    updated_at = NOW()
+            """,
+                int(user_id),
+                int(topic_id),
+                str(topic_name or "")[:128]
+            )    
                     
 
 # Global database instance
