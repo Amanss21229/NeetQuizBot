@@ -894,6 +894,141 @@ Hello! To use this bot, you need to join our official groups/channels first.
         
         await self.application.bot.set_my_commands(commands)
 
+    # ================================================================
+    # AIRA — OWNER PERSONAL ASSISTANT CONTROLS
+    # ================================================================
+
+    async def aira_offline_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        user = update.effective_user
+        chat = update.effective_chat
+
+        if (
+            not user
+            or user.id != OWNER_ID
+            or not chat
+            or chat.type != ChatType.PRIVATE
+        ):
+            return
+
+        try:
+            await db.set_aira_mode(
+                "offline",
+                OWNER_ID
+            )
+
+            await update.effective_message.reply_text(
+                "✦ AIRA • Personal Assistant\n\n"
+                "🌙 Offline mode is now active.\n\n"
+                "Aman, aap ab peacefully apne kaam par "
+                "focus kar sakte ho. Incoming personal "
+                "messages ko AIRA handle karegi. ✨\n\n"
+                "Status: OFFLINE 🟠"
+            )
+
+            logger.info(
+                "AIRA mode changed to OFFLINE by owner"
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to enable AIRA offline mode"
+            )
+
+            await update.effective_message.reply_text(
+                "⚠️ AIRA ka offline mode update nahi ho "
+                "paya. Please thodi der baad try kariye."
+            )
+
+
+    async def aira_online_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        user = update.effective_user
+        chat = update.effective_chat
+
+        if (
+            not user
+            or user.id != OWNER_ID
+            or not chat
+            or chat.type != ChatType.PRIVATE
+        ):
+            return
+
+        try:
+            await db.set_aira_mode(
+                "online",
+                OWNER_ID
+            )
+
+            await update.effective_message.reply_text(
+                "✦ AIRA • Personal Assistant\n\n"
+                "🟢 Online mode is now active.\n\n"
+                "Welcome back, Aman! ✨\n"
+                "AIRA ab online-mode rules follow karegi.\n\n"
+                "Status: ONLINE 🟢"
+            )
+
+            logger.info(
+                "AIRA mode changed to ONLINE by owner"
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to enable AIRA online mode"
+            )
+
+            await update.effective_message.reply_text(
+                "⚠️ AIRA ka online mode update nahi ho "
+                "paya. Please thodi der baad try kariye."
+            )
+
+
+    async def aira_status_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE
+    ):
+        user = update.effective_user
+        chat = update.effective_chat
+
+        if (
+            not user
+            or user.id != OWNER_ID
+            or not chat
+            or chat.type != ChatType.PRIVATE
+        ):
+            return
+
+        try:
+            mode = await db.get_aira_mode()
+
+            if mode == "offline":
+                status = "🌙 OFFLINE"
+            else:
+                status = "🟢 ONLINE"
+
+            await update.effective_message.reply_text(
+                "✦ AIRA • Personal Assistant\n\n"
+                f"Current status: {status}\n\n"
+                "AIRA settings database me safely "
+                "persisted hain. ✨"
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to read AIRA status"
+            )
+
+            await update.effective_message.reply_text(
+                "⚠️ AIRA status abhi read nahi ho pa raha."
+            )    
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
         user = update.effective_user
