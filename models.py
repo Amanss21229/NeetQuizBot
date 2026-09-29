@@ -218,7 +218,7 @@ class Database:
             # ✅ Ensure default owner is always admin
             await conn.execute("""
                 INSERT INTO admins (user_id, username, first_name, promoted_by)
-                VALUES (8147394357, 'aimforaiims007', 'Aman', 8147394357)
+                VALUES (8518377976, 'FounderOfLET', 'Aman', 8518377976)
                 ON CONFLICT (user_id) DO NOTHING
             """)
             
