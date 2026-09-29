@@ -174,6 +174,10 @@ class AutoQuizReader:
                 "TG_USER_SESSION belongs to a bot, not a user"
             )
 
+        # AIRA needs the connected personal account ID only for
+        # safe self-message/Saved Messages exclusion.
+        self.telegram_user_id = int(me.id)        
+
         self.started = True
 
         logger.info(
@@ -184,14 +188,151 @@ class AutoQuizReader:
 
         return True
 
+    async def _handle_aira_private_message(self, event) -> bool:
+        """
+        Phase 2 AIRA private-DM detector.
+
+        Responsibilities in this phase ONLY:
+        - accept incoming private human DMs
+        - ignore self/Saved Messages
+        - ignore bots
+        - persist Telegram identity
+        - persist incoming activity timestamp
+        - write a diagnostic log
+
+        It intentionally:
+        - sends NO reply
+        - creates NO forum topic
+        - forwards NO message
+        - changes NO AIRA mode
+        """
+
+        try:
+            # AIRA is strictly for incoming private conversations.
+            if not getattr(event, "is_private", False):
+                return False
+
+            # Never process outgoing messages from Aman.
+            if getattr(event, "out", False):
+                return False
+
+            sender_id = getattr(event, "sender_id", None)
+
+            if not sender_id:
+                return False
+
+            sender_id = int(sender_id)
+
+            # Saved Messages / self-chat protection.
+            if (
+                self.telegram_user_id is not None
+                and sender_id == self.telegram_user_id
+            ):
+                return False
+
+            sender = await event.get_sender()
+
+            if not sender:
+                return False
+
+            # AIRA is for real personal users only.
+            # Telegram bots must never enter this pipeline.
+            if getattr(sender, "bot", False):
+                return False
+
+            # Defensive guard: only Telegram User entities.
+            if not isinstance(sender, types.User):
+                return False
+
+            first_name = (
+                getattr(sender, "first_name", None)
+                or ""
+            ).strip() or None
+
+            last_name = (
+                getattr(sender, "last_name", None)
+                or ""
+            ).strip() or None
+
+            username = (
+                getattr(sender, "username", None)
+                or ""
+            ).strip() or None
+
+            # Phase-1 DB methods are reused here.
+            # Existing timestamps/topic mapping are preserved.
+            await db.upsert_aira_user(
+                user_id=sender_id,
+                first_name=first_name,
+                last_name=last_name,
+                username=username
+            )
+
+            await db.update_aira_user_activity(
+                user_id=sender_id,
+                incoming=True
+            )
+
+            message = getattr(event, "message", None)
+
+            logger.info(
+                "AIRA PRIVATE DM DETECTED | "
+                "user_id=%s | username=%s | "
+                "message_id=%s | media=%s",
+                sender_id,
+                username or "-",
+                getattr(message, "id", None),
+                bool(
+                    getattr(
+                        message,
+                        "media",
+                        None
+                    )
+                )
+            )
+
+            return True
+
+        except Exception:
+            # AIRA must NEVER be capable of taking down
+            # the existing Auto Quiz Reader.
+            logger.exception(
+                "AIRA private DM detection failed | "
+                "sender_id=%s",
+                getattr(event, "sender_id", None)
+            )
+
+            return False    
+
     async def _handle_new_message(self, event):
         if not self.started:
             return
 
         chat_id = event.chat_id
 
-        if chat_id not in SOURCE_CHANNELS:
+        # ============================================================
+        # ROUTE 1 — EXISTING AUTO QUIZ SOURCE CHANNELS
+        # ============================================================
+        #
+        # Source channels always remain owned by the existing
+        # Auto Quiz Reader flow below.
+        #
+        # Nothing in the existing quiz-processing code is changed.
+        # ============================================================
+
+        if chat_id in SOURCE_CHANNELS:
+            pass
+
+        # ============================================================
+        # ROUTE 2 — AIRA PERSONAL PRIVATE DMs
+        # ============================================================
+        else:
+            await self._handle_aira_private_message(event)
             return
+
+        # ============================================================
+        # EXISTING AUTO QUIZ CODE CONTINUES UNCHANGED BELOW
+        # ============================================================
 
         message = event.message
 
@@ -395,6 +536,7 @@ class AutoQuizReader:
 
         self.client = None
         self.started = False
+        self.telegram_user_id = None
         self._processing.clear()
 
         logger.info("Auto Quiz Reader stopped")
