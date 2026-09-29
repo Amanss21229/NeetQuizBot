@@ -37,6 +37,7 @@ from telegram import (
 )
 from telegram.helpers import escape_markdown
 from telegram.constants import ChatAction
+from telegram.constants import ChatType
 from telegram.error import (
     Forbidden,
     BadRequest,
