@@ -1270,6 +1270,58 @@ Let's ace NEET together! 🚀
                     "sent"
                 )
 
+                # ==================================================
+                # AUTO QUIZ — ADMIN SUCCESS REPORT
+                # ==================================================
+
+                option_letter = chr(
+                    65 + int(quiz["correct_option"])
+                )
+
+                total_sent = (
+                    int(counts["main_groups"])
+                    + int(counts["main_channels"])
+                    + int(counts["clone_groups"])
+                    + int(counts["clone_channels"])
+                )
+
+                confirmation = (
+                    "🎯 **Quiz Forwarded Successfully!**\n\n"
+                    "📊 Main Bot:\n"
+                    f"🏠 Groups: {counts['main_groups']}\n"
+                    f"📢 Channels: {counts['main_channels']}\n"
+                    "📊 Clone Bots:\n"
+                    f"🏠 Groups: {counts['clone_groups']}\n"
+                    f"📢 Channels: {counts['clone_channels']}\n"
+                    f"📈 Total: {total_sent}\n\n"
+                    f"✅ Correct Answer: **{option_letter}**"
+                )
+
+                try:
+                    await context.bot.send_message(
+                        chat_id=ADMIN_GROUP_ID,
+                        text=confirmation,
+                        parse_mode="Markdown"
+                    )
+
+                    logger.info(
+                        "AUTO QUIZ ADMIN REPORT SENT | "
+                        "slot=%s | quiz_id=%s | total=%s",
+                        slot_key,
+                        quiz["id"],
+                        total_sent
+                    )
+
+                except Exception:
+                    # Reporting must never turn an already-successful
+                    # quiz distribution into a failed scheduler slot.
+                    logger.exception(
+                        "AUTO QUIZ ADMIN REPORT FAILED | "
+                        "slot=%s | quiz_id=%s",
+                        slot_key,
+                        quiz["id"]
+                    )        
+
                 logger.info(
                     "AUTO QUIZ SENT | "
                     "slot=%s | subject=%s | "
@@ -1343,8 +1395,11 @@ Let's ace NEET together! 🚀
             )
         )
 
-        main_sent = 0
-        clone_sent = 0
+        main_group_sent = 0
+        main_channel_sent = 0
+
+        clone_group_sent = 0
+        clone_channel_sent = 0        
 
         # ==================================================
         # MAIN BOT DESTINATIONS
@@ -1487,7 +1542,10 @@ Let's ace NEET together! 🚀
                     correct_option=correct_option
                 )
 
-                main_sent += 1
+                if chat.get("type") == "channel":
+                    main_channel_sent += 1
+                else:
+                    main_group_sent += 1
 
             except Exception as exc:
 
@@ -1623,7 +1681,10 @@ Let's ace NEET together! 🚀
                         correct_option=correct_option
                     )
 
-                    clone_sent += 1
+                    if cgroup.get("type") == "channel":
+                        clone_channel_sent += 1
+                    else:
+                        clone_group_sent += 1        
 
                 except Exception as exc:
 
@@ -1636,8 +1697,20 @@ Let's ace NEET together! 🚀
                     )
 
         return {
-            "main": main_sent,
-            "clones": clone_sent
+            "main_groups": main_group_sent,
+            "main_channels": main_channel_sent,
+            "clone_groups": clone_group_sent,
+            "clone_channels": clone_channel_sent,
+
+            # Keep aggregate values for existing scheduler logic.
+            "main": (
+                main_group_sent
+                + main_channel_sent
+            ),
+            "clones": (
+                clone_group_sent
+                + clone_channel_sent
+            )
         } 
     
     async def track_groups(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
