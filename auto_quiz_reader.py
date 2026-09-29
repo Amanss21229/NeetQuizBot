@@ -84,6 +84,10 @@ class AutoQuizReader:
         # Prevent two rapid messages from the same person from
         # racing topic creation / conversation-state updates.
         self._aira_user_locks = {}
+        # Users for whom AIRA itself is currently sending an auto-reply.
+        # This prevents AIRA's own outgoing reply from being mistaken
+        # for a manual message sent by Aman.
+        self._aira_sending_replies = set()        
 
     @staticmethod
     def _normalize_session_string(value: str) -> str:
@@ -370,7 +374,32 @@ class AutoQuizReader:
             f'💬 <a href="{safe_url}"><b>WhatsApp par text karein</b></a>\n\n'
             "<i>Please sirf genuine urgency me use karein — "
             "call nahi, text message only. ✨</i>"
-        )    
+        )   
+
+    async def _aira_send_auto_reply(
+        self,
+        event,
+        user_id: int,
+        text: str
+    ):
+        """
+        Send an AIRA-generated reply without counting it as
+        a manual owner message.
+        """
+
+        self._aira_sending_replies.add(int(user_id))
+
+        try:
+            return await event.reply(
+                text,
+                parse_mode="html",
+                link_preview=False
+            )
+
+        finally:
+            self._aira_sending_replies.discard(
+                int(user_id)
+            )    
 
     async def _aira_get_or_create_topic(
         self,
@@ -511,15 +540,152 @@ class AutoQuizReader:
 
             return True
 
-        except Exception:
-            # Protected/non-forwardable messages must never
-            # stop AIRA or Auto Quiz.
-            logger.exception(
-                "AIRA message forwarding failed | "
-                "user_id=%s | message_id=%s | topic_id=%s",
+        except Exception as exc:
+            # Telegram intentionally prevents some messages from
+            # being persistently forwarded, e.g. disappearing /
+            # View Once / otherwise non-forwardable content.
+            #
+            # Never attempt to bypass that restriction. Instead,
+            # preserve only an archive record that such a message
+            # was received.
+
+            error_name = type(exc).__name__
+
+            logger.warning(
+                "AIRA MESSAGE NOT FORWARDABLE | "
+                "user_id=%s | message_id=%s | "
+                "topic_id=%s | reason=%s",
                 user_id,
                 getattr(message, "id", None),
-                topic_id
+                topic_id,
+                error_name
+            )
+
+            try:
+                destination = await self.client.get_input_entity(
+                    AIRA_ACTIVITY_GROUP_ID
+                )
+
+                notice = (
+                    "⚠️ <b>AIRA • Archive Notice</b>\n\n"
+                    "<blockquote>"
+                    "A disappearing, View Once, protected, or "
+                    "otherwise non-forwardable message was received "
+                    "from this user.\n\n"
+                    "Telegram restrictions ki wajah se original "
+                    "content ko archive nahi kiya gaya."
+                    "</blockquote>\n\n"
+                    f"<code>Source message ID: "
+                    f"{getattr(message, 'id', 'unknown')}</code>"
+                )
+
+                await self.client.send_message(
+                    destination,
+                    notice,
+                    parse_mode="html",
+                    reply_to=int(topic_id),
+                    link_preview=False
+                )
+
+                logger.info(
+                    "AIRA ARCHIVE NOTICE SAVED | "
+                    "user_id=%s | message_id=%s | topic_id=%s",
+                    user_id,
+                    getattr(message, "id", None),
+                    topic_id
+                )
+
+                return False
+
+            except Exception:
+                # Unexpected archive-notice failure deserves a
+                # traceback, but must still never affect AIRA replies
+                # or Auto Quiz.
+                logger.exception(
+                    "AIRA ARCHIVE NOTICE FAILED | "
+                    "user_id=%s | message_id=%s | topic_id=%s",
+                    user_id,
+                    getattr(message, "id", None),
+                    topic_id
+                )
+
+                return False    
+
+    async def _handle_aira_owner_message(
+        self,
+        event
+    ) -> bool:
+        """
+        Track Aman's manual outgoing personal messages.
+
+        AIRA's own generated replies are excluded.
+        """
+
+        try:
+            if not getattr(event, "is_private", False):
+                return False
+
+            if not getattr(event, "out", False):
+                return False
+
+            user_id = getattr(event, "chat_id", None)
+
+            if not user_id:
+                return False
+
+            user_id = int(user_id)
+
+            # Saved Messages / self-chat.
+            if (
+                self.telegram_user_id is not None
+                and user_id == self.telegram_user_id
+            ):
+                return False
+
+            # AIRA itself is currently sending this user's reply.
+            if user_id in self._aira_sending_replies:
+                return False
+
+            chat = await event.get_chat()
+
+            if not isinstance(chat, types.User):
+                return False
+
+            if getattr(chat, "bot", False):
+                return False
+
+            await db.upsert_aira_user(
+                user_id=user_id,
+                first_name=(
+                    getattr(chat, "first_name", None)
+                    or ""
+                ).strip() or None,
+                last_name=(
+                    getattr(chat, "last_name", None)
+                    or ""
+                ).strip() or None,
+                username=(
+                    getattr(chat, "username", None)
+                    or ""
+                ).strip() or None
+            )
+
+            await db.update_aira_user_activity(
+                user_id=user_id,
+                owner_message=True
+            )
+
+            logger.info(
+                "AIRA OWNER ACTIVITY | user_id=%s",
+                user_id
+            )
+
+            return True
+
+        except Exception:
+            logger.exception(
+                "AIRA owner activity tracking failed | chat_id=%s",
+                getattr(event, "chat_id", None)
             )
 
             return False    
@@ -536,7 +702,9 @@ class AutoQuizReader:
                 return False
 
             if getattr(event, "out", False):
-                return False
+                return await self._handle_aira_owner_message(
+                    event
+                )
 
             sender_id = getattr(
                 event,
@@ -641,7 +809,7 @@ class AutoQuizReader:
                 now = datetime.now(timezone.utc)
 
                 previous_incoming = None
-                previous_auto_reply = None
+                previous_owner_message = None
                 previous_urgent_reply = None
                 offline_stage = 0
 
@@ -652,9 +820,9 @@ class AutoQuizReader:
                         )
                     )
 
-                    previous_auto_reply = self._aira_dt(
+                    previous_owner_message = self._aira_dt(
                         old_state.get(
-                            "last_auto_reply_at"
+                            "last_owner_message_at"
                         )
                     )
 
@@ -671,11 +839,27 @@ class AutoQuizReader:
                         or 0
                     )
 
+                previous_chat_activity = None
+
+                activity_times = [
+                    value
+                    for value in (
+                        previous_incoming,
+                        previous_owner_message
+                    )
+                    if value is not None
+                ]
+
+                if activity_times:
+                    previous_chat_activity = max(
+                        activity_times
+                    )
+
                 idle_for = (
-                    now - previous_incoming
-                    if previous_incoming
+                    now - previous_chat_activity
+                    if previous_chat_activity
                     else None
-                )
+                ) 
 
                 new_conversation = (
                     idle_for is None
@@ -727,13 +911,13 @@ class AutoQuizReader:
 
                 if urgent_allowed:
                     try:
-                        await event.reply(
+                        await self._aira_send_auto_reply(
+                            event,
+                            sender_id,
                             self._aira_urgent_message(
                                 first_name
-                            ),
-                            parse_mode="html",
-                            link_preview=False
-                        )
+                            )
+                        )        
 
                         await db.update_aira_user_activity(
                             user_id=sender_id,
@@ -775,12 +959,12 @@ class AutoQuizReader:
                     # First message.
                     if offline_stage <= 0:
                         try:
-                            await event.reply(
+                            await self._aira_send_auto_reply(
+                                event,
+                                sender_id,
                                 self._aira_offline_first_message(
                                     first_name
-                                ),
-                                parse_mode="html",
-                                link_preview=False
+                                )
                             )
 
                             await db.update_aira_user_activity(
@@ -811,12 +995,12 @@ class AutoQuizReader:
                     # Exactly one conversational follow-up.
                     if offline_stage == 1:
                         try:
-                            await event.reply(
+                            await self._aira_send_auto_reply(
+                                event,
+                                sender_id,
                                 self._aira_offline_followup_message(
                                     first_name
-                                ),
-                                parse_mode="html",
-                                link_preview=False
+                                )
                             )
 
                             await db.update_aira_user_activity(
@@ -858,12 +1042,12 @@ class AutoQuizReader:
                     # after >=30 minutes inactivity.
                     if new_conversation:
                         try:
-                            await event.reply(
+                            await self._aira_send_auto_reply(
+                                event,
+                                sender_id,
                                 self._aira_online_message(
                                     first_name
-                                ),
-                                parse_mode="html",
-                                link_preview=False
+                                )
                             )
 
                             await db.update_aira_user_activity(
@@ -1145,6 +1329,7 @@ class AutoQuizReader:
         self.started = False
         self.telegram_user_id = None
         self._aira_user_locks.clear()
+        self._aira_sending_replies.clear()
         self._processing.clear()
 
         logger.info("Auto Quiz Reader stopped")
