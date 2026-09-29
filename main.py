@@ -100,7 +100,7 @@ AUTO_QUIZ_SOURCE_CHANNELS = {
 }
 
 TIMEZONE = pytz.timezone('Asia/Kolkata')
-OWNER_ID = 8147394357
+OWNER_ID = 8518377976
 
 # Private AI configuration — MAIN BOT ONLY
 PRIVATE_AI_ENABLED = (
