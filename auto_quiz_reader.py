@@ -409,8 +409,8 @@ class AutoQuizReader:
             )
 
             result = await self.client(
-                functions.channels.CreateForumTopicRequest(
-                    channel=inbox,
+                functions.messages.CreateForumTopicRequest(
+                    peer=inbox,
                     title=topic_name,
                     random_id=secrets.randbits(63)
                 )
