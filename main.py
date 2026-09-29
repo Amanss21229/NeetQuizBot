@@ -687,6 +687,28 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("convert", self.convert_command))
         self.application.add_handler(CommandHandler("end", self.end_updatequiz_command))
 
+        # AIRA — owner personal assistant controls
+        self.application.add_handler(
+            CommandHandler(
+                "offline",
+                self.aira_offline_command
+            )
+        )
+
+        self.application.add_handler(
+            CommandHandler(
+                "online",
+                self.aira_online_command
+            )
+        )
+
+        self.application.add_handler(
+            CommandHandler(
+                "airastatus",
+                self.aira_status_command
+            )
+        )        
+        
         # High-priority gate: blocks non-owner updates during UpdateQuiz mode
         self.application.add_handler(
             MessageHandler(filters.ALL, self.update_quiz_mode_gate),
