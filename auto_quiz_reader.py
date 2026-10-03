@@ -1,5 +1,6 @@
 import asyncio
 import html
+import io
 import logging
 import os
 import re
@@ -1315,6 +1316,509 @@ class AutoQuizReader:
                 message.id,
                 correct_index
             )
+
+    async def get_auto_quiz_media_snapshot(
+        self,
+        source_chat_id: int,
+        source_message_id: int
+    ):
+        """
+        Re-read the original source quiz and extract its Telegram poll media.
+
+        This is read-only. It does not change the existing source-capture
+        or answer-reveal flow.
+        """
+        if not self.client or not self.started:
+            return None
+
+        try:
+            source_message = await self.client.get_messages(
+                int(source_chat_id),
+                ids=int(source_message_id)
+            )
+
+            media = getattr(source_message, "media", None)
+
+            if not isinstance(
+                media,
+                types.MessageMediaPoll
+            ):
+                return None
+
+            poll = getattr(media, "poll", None)
+
+            if not poll or not getattr(
+                poll,
+                "quiz",
+                False
+            ):
+                return None
+
+            # Telegram MTProto stores poll-level attached media
+            # separately from the Poll object.
+            question_media = (
+                await self._build_auto_poll_media_spec(
+                    getattr(
+                        media,
+                        "attached_media",
+                        None
+                    ),
+                    option_media=False
+                )
+            )
+
+            option_media = []
+
+            for answer in (
+                getattr(
+                    poll,
+                    "answers",
+                    []
+                )
+                or []
+            ):
+                option_media.append(
+                    await self._build_auto_poll_media_spec(
+                        getattr(
+                            answer,
+                            "media",
+                            None
+                        ),
+                        option_media=True
+                    )
+                )
+
+            return {
+                "question": question_media,
+                "options": option_media,
+            }
+
+        except Exception:
+            logger.exception(
+                "AUTO QUIZ media snapshot failed | "
+                "chat=%s | message=%s",
+                source_chat_id,
+                source_message_id
+            )
+
+            return None
+
+
+    async def _download_auto_poll_media(
+        self,
+        media
+    ):
+        if media is None or not self.client:
+            return None
+
+        stream = io.BytesIO()
+
+        try:
+            result = await self.client.download_media(
+                media,
+                file=stream
+            )
+
+            if result is None:
+                return None
+
+            return stream.getvalue()
+
+        except Exception:
+            logger.warning(
+                "AUTO QUIZ media download failed | type=%s",
+                type(media).__name__,
+                exc_info=True
+            )
+
+            return None
+
+
+    @staticmethod
+    def _document_kind(document):
+        attributes = (
+            getattr(
+                document,
+                "attributes",
+                None
+            )
+            or []
+        )
+
+        names = {
+            type(attribute).__name__
+            for attribute in attributes
+        }
+
+        if "DocumentAttributeSticker" in names:
+            return "sticker"
+
+        if "DocumentAttributeAnimated" in names:
+            return "animation"
+
+        if "DocumentAttributeVideo" in names:
+            return "video"
+
+        if "DocumentAttributeAudio" in names:
+            return "audio"
+
+        return "document"
+
+
+    async def _build_auto_poll_media_spec(
+        self,
+        media,
+        option_media: bool
+    ):
+        if media is None:
+            return None
+
+        media_name = type(media).__name__
+
+        # ============================================================
+        # PHOTO / LIVE PHOTO
+        # ============================================================
+
+        if isinstance(
+            media,
+            types.MessageMediaPhoto
+        ):
+            live_video = getattr(
+                media,
+                "video",
+                None
+            )
+
+            if (
+                getattr(
+                    media,
+                    "live_photo",
+                    False
+                )
+                and live_video is not None
+            ):
+                photo_bytes = (
+                    await self._download_auto_poll_media(
+                        media
+                    )
+                )
+
+                video_bytes = (
+                    await self._download_auto_poll_media(
+                        live_video
+                    )
+                )
+
+                if photo_bytes and video_bytes:
+                    return {
+                        "type": "live_photo",
+
+                        "photo_bytes": photo_bytes,
+                        "video_bytes": video_bytes,
+
+                        "photo_filename":
+                            "poll_live_photo.jpg",
+
+                        "video_filename":
+                            "poll_live_photo.mp4",
+
+                        "photo_mime":
+                            "image/jpeg",
+
+                        "video_mime":
+                            "video/mp4",
+                    }
+
+            data = await self._download_auto_poll_media(
+                media
+            )
+
+            if data:
+                return {
+                    "type": "photo",
+                    "bytes": data,
+                    "filename": "poll_photo.jpg",
+                    "mime": "image/jpeg",
+                }
+
+            return None
+
+        # ============================================================
+        # LOCATION / LIVE LOCATION
+        # ============================================================
+
+        if isinstance(
+            media,
+            (
+                types.MessageMediaGeo,
+                types.MessageMediaGeoLive
+            )
+        ):
+            geo = getattr(
+                media,
+                "geo",
+                None
+            )
+
+            if geo is None:
+                return None
+
+            return {
+                "type": "location",
+
+                "latitude": float(
+                    getattr(
+                        geo,
+                        "lat",
+                        0.0
+                    )
+                ),
+
+                "longitude": float(
+                    getattr(
+                        geo,
+                        "long",
+                        0.0
+                    )
+                ),
+            }
+
+        # ============================================================
+        # VENUE
+        # ============================================================
+
+        if isinstance(
+            media,
+            types.MessageMediaVenue
+        ):
+            geo = getattr(
+                media,
+                "geo",
+                None
+            )
+
+            if geo is None:
+                return None
+
+            return {
+                "type": "venue",
+
+                "latitude": float(
+                    getattr(
+                        geo,
+                        "lat",
+                        0.0
+                    )
+                ),
+
+                "longitude": float(
+                    getattr(
+                        geo,
+                        "long",
+                        0.0
+                    )
+                ),
+
+                "title": str(
+                    getattr(
+                        media,
+                        "title",
+                        ""
+                    )
+                    or "Venue"
+                ),
+
+                "address": str(
+                    getattr(
+                        media,
+                        "address",
+                        ""
+                    )
+                    or ""
+                ),
+
+                "foursquare_id": str(
+                    getattr(
+                        media,
+                        "venue_id",
+                        ""
+                    )
+                    or ""
+                ),
+
+                "foursquare_type": str(
+                    getattr(
+                        media,
+                        "venue_type",
+                        ""
+                    )
+                    or ""
+                ),
+            }
+
+        # ============================================================
+        # LINK
+        # ============================================================
+
+        if isinstance(
+            media,
+            types.MessageMediaWebPage
+        ):
+            webpage = getattr(
+                media,
+                "webpage",
+                None
+            )
+
+            url = getattr(
+                webpage,
+                "url",
+                None
+            )
+
+            if url:
+                return {
+                    "type": "link",
+                    "url": str(url),
+                }
+
+            return None
+
+        # ============================================================
+        # DOCUMENT / VIDEO / ANIMATION / STICKER / AUDIO
+        # ============================================================
+
+        if isinstance(
+            media,
+            types.MessageMediaDocument
+        ):
+            document = getattr(
+                media,
+                "document",
+                None
+            )
+
+            if document is None:
+                return None
+
+            kind = self._document_kind(
+                document
+            )
+
+            # Telegram Bot API currently does not support
+            # audio/document as poll-option media.
+            if (
+                option_media
+                and kind in {
+                    "audio",
+                    "document"
+                }
+            ):
+                logger.warning(
+                    "AUTO QUIZ option media unsupported "
+                    "by Bot API | type=%s",
+                    kind
+                )
+
+                return None
+
+            data = (
+                await self._download_auto_poll_media(
+                    media
+                )
+            )
+
+            if not data:
+                return None
+
+            mime = str(
+                getattr(
+                    document,
+                    "mime_type",
+                    ""
+                )
+                or {
+                    "video": "video/mp4",
+                    "animation": "video/mp4",
+                    "sticker": "application/octet-stream",
+                    "audio": "audio/mpeg",
+                    "document": "application/octet-stream",
+                }.get(
+                    kind,
+                    "application/octet-stream"
+                )
+            )
+
+            filename = "poll_media.bin"
+
+            attributes = (
+                getattr(
+                    document,
+                    "attributes",
+                    None
+                )
+                or []
+            )
+
+            for attribute in attributes:
+                name = getattr(
+                    attribute,
+                    "file_name",
+                    None
+                )
+
+                if name:
+                    filename = str(name)
+                    break
+
+            if kind == "video":
+                filename = (
+                    filename
+                    if "." in filename
+                    else "poll_video.mp4"
+                )
+
+            elif kind == "animation":
+                filename = (
+                    filename
+                    if "." in filename
+                    else "poll_animation.mp4"
+                )
+
+            elif kind == "sticker":
+                filename = (
+                    filename
+                    if "." in filename
+                    else "poll_sticker.webp"
+                )
+
+            elif kind == "audio":
+                filename = (
+                    filename
+                    if "." in filename
+                    else "poll_audio.mp3"
+                )
+
+            elif kind == "document":
+                filename = (
+                    filename
+                    if "." in filename
+                    else "poll_document.bin"
+                )
+
+            return {
+                "type": kind,
+                "bytes": data,
+                "filename": filename,
+                "mime": mime,
+            }
+
+        logger.info(
+            "AUTO QUIZ source media type not mapped | type=%s",
+            media_name
+        )
+
+        return None    
 
     async def stop(self):
         if self.client:
