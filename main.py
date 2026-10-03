@@ -3288,14 +3288,71 @@ Let's ace NEET together! 🚀
                         quiz_question = quiz_question + "\n\n【~@DrQuizRobot】"
                         
                         # Send new poll (not forward) with is_anonymous=False
-                        sent_message = await context.bot.send_poll(
-                            chat_id=chat['id'],
-                            question=quiz_question,
-                            options=quiz_options,
-                            type='quiz',  # Always send as quiz for answer tracking
-                            correct_option_id=correct_option,
-                            is_anonymous=False,  # Critical: allows us to track user answers
-                            explanation=poll.explanation if poll.explanation else "📚 NEET Quiz Bot"
+                        send_options = []
+
+                        for index, option_text in enumerate(
+                            quiz_options
+                        ):
+                            source_media = None
+
+                            if (
+                                index
+                                < len(media_options)
+                            ):
+                                source_media = (
+                                    media_options[
+                                        index
+                                    ]
+                                )
+
+                            if source_media:
+                                send_options.append(
+                                    InputPollOption(
+                                        text=option_text,
+                                        media=source_media.get(
+                                            "media"
+                                        )
+                                    )
+                                )
+                            else:
+                                send_options.append(
+                                    InputPollOption(
+                                        text=option_text
+                                    )
+                                )
+
+                        question_media = (
+                            self._management_poll_media_to_input(
+                                getattr(
+                                    poll,
+                                    "media",
+                                    None
+                                )
+                            )
+                        )
+
+                        sent_message = (
+                            await context.bot.send_poll(
+                                chat_id=chat['id'],
+
+                                question=quiz_question,
+
+                                options=send_options,
+
+                                type='quiz',
+
+                                correct_option_id=correct_option,
+
+                                is_anonymous=False,
+
+                                explanation=(
+                                    poll.explanation
+                                    if poll.explanation
+                                    else "📚 NEET Quiz Bot"
+                                ),
+
+                                media=question_media
+                            )
                         )
                         
                         # Store poll mapping for answer tracking
@@ -3347,15 +3404,72 @@ Let's ace NEET together! 🚀
                                     c_question = poll.question
                                     c_options = options
                         c_question = c_question + "\n\n【~@" + (instance.bot_username or "QuizBot") + "】"
-                        c_sent = await instance.application.bot.send_poll(
-                            chat_id=cgroup['id'],
-                            question=c_question,
-                            options=c_options,
-                            type='quiz',
-                            correct_option_id=correct_option,
-                            is_anonymous=False,
-                            explanation=poll.explanation if poll.explanation else "📚 Quiz Bot"
+                        clone_options = []
+
+                        for index, option_text in enumerate(
+                            c_options
+                        ):
+                            source_media = None
+
+                            if (
+                                index
+                                < len(media_options)
+                            ):
+                                source_media = (
+                                    media_options[
+                                        index
+                                    ]
+                                )
+
+                            if source_media:
+                                clone_options.append(
+                                    InputPollOption(
+                                        text=option_text,
+                                        media=source_media.get(
+                                            "media"
+                                        )
+                                    )
+                                )
+                            else:
+                                clone_options.append(
+                                    InputPollOption(
+                                        text=option_text
+                                    )
+                                )
+
+                        clone_question_media = (
+                            self._management_poll_media_to_input(
+                                getattr(
+                                    poll,
+                                    "media",
+                                    None
+                                )
+                            )
                         )
+
+                        c_sent = (
+                            await instance.application.bot.send_poll(
+                                chat_id=cgroup['id'],
+
+                                question=c_question,
+
+                                options=clone_options,
+
+                                type='quiz',
+
+                                correct_option_id=correct_option,
+
+                                is_anonymous=False,
+
+                                explanation=(
+                                    poll.explanation
+                                    if poll.explanation
+                                    else "📚 Quiz Bot"
+                                ),
+
+                                media=clone_question_media
+                            )
+                        )            
                         await db.add_poll_mapping(
                             poll_id=c_sent.poll.id,
                             quiz_id=quiz_id,
@@ -3489,7 +3603,22 @@ Let's ace NEET together! 🚀
             self.update_quiz_collected.append({
                 'question': qd['question'],
                 'options': qd['options'],
-                'correct_option': correct_option_index
+                
+                'media_options': (
+                    qd.get(
+                        'media_options'
+                    )
+                    or []
+                ),
+                
+                'poll_media': (
+                    qd.get(
+                        'poll_media'
+                    )
+                ),
+                
+                'correct_option':
+                    correct_option_index
             })
             count = len(self.update_quiz_collected)
             await message.reply_text(
@@ -3536,7 +3665,16 @@ Let's ace NEET together! 🚀
         try:
             if not poll.question or not poll.options:
                 return
-            options = [opt.text for opt in poll.options]
+            options = [
+                opt.text
+                for opt in poll.options
+            ]
+            
+            media_options = (
+                self._management_poll_options_with_media(
+                    poll
+                )
+            )
             correct_option_id = poll.correct_option_id
 
             if correct_option_id is not None and 0 <= correct_option_id < len(options):
@@ -3544,6 +3682,16 @@ Let's ace NEET together! 🚀
                 self.update_quiz_collected.append({
                     'question': poll.question,
                     'options': options,
+                    'media_options': media_options,
+                    'poll_media': (
+                        self._management_poll_media_to_input(
+                            getattr(
+                                poll,
+                                "media",
+                                None
+                            )
+                        )
+                    ),
                     'correct_option': correct_option_id
                 })
                 count = len(self.update_quiz_collected)
@@ -3566,9 +3714,19 @@ Let's ace NEET together! 🚀
                     'correct_option': -1,
                     'question': poll.question,
                     'options': options,
+                    'media_options': media_options,
+                    'poll_media': (
+                        self._management_poll_media_to_input(
+                            getattr(
+                                poll,
+                                "media",
+                                None
+                            )
+                        )
+                    ),
                     'message_id': message.message_id,
                     'poll_object': poll,
-                    'collect_mode': True   # flag: collect, don't forward
+                    'collect_mode': True
                 }
                 await context.bot.send_message(
                     chat_id=chat.id,
@@ -3638,14 +3796,68 @@ Let's ace NEET together! 🚀
                 # Truncate if needed (Telegram max is 300 chars)
                 if len(question) > 300:
                     question = quiz['question'][:270] + "...\n\n【 ~@DrQuizRobot 】"
+                convert_options = []
+
+                for index, option_text in enumerate(
+                    quiz['options']
+                ):
+                    source_media = None
+
+                    media_options = (
+                        quiz.get(
+                            'media_options'
+                        )
+                        or []
+                    )
+
+                    if (
+                        index
+                        < len(media_options)
+                    ):
+                        source_media = (
+                            media_options[
+                                index
+                            ]
+                        )
+
+                    if source_media:
+                        convert_options.append(
+                            InputPollOption(
+                                text=option_text,
+                                media=source_media.get(
+                                    "media"
+                                )
+                            )
+                        )
+                    else:
+                        convert_options.append(
+                            InputPollOption(
+                                text=option_text
+                            )
+                        )
+
                 await context.bot.send_poll(
                     chat_id=chat_id,
+
                     question=question,
-                    options=quiz['options'],
+
+                    options=convert_options,
+
                     type='quiz',
-                    correct_option_id=quiz['correct_option'],
-                    is_anonymous=True,    # invisible votes — shareable in channels
-                    explanation="📚 @DrQuizRobot"
+
+                    correct_option_id=(
+                        quiz[
+                            'correct_option'
+                        ]
+                    ),
+
+                    is_anonymous=True,
+
+                    explanation="📚 @DrQuizRobot",
+
+                    media=quiz.get(
+                        'poll_media'
+                    )
                 )
                 sent += 1
                 await asyncio.sleep(0.3)  # avoid flood limits
