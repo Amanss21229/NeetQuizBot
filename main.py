@@ -1,6 +1,7 @@
 import asyncio
 import asyncpg
 import html
+import httpx
 import json
 import logging
 import os
@@ -1354,6 +1355,737 @@ Let's ace NEET together! 🚀
                 "Automatic quiz scheduler tick failed"
             )
 
+    @staticmethod
+    def _auto_poll_media_from_response(
+        media
+    ):
+        """
+        Convert Bot API PollMedia returned by Telegram
+        into reusable sendPoll input media.
+        """
+
+        if not media:
+            return None
+
+        if media.get("link", {}).get("url"):
+            return {
+                "type": "link",
+                "url": media["link"]["url"],
+            }
+
+        if media.get("location"):
+            location = media["location"]
+
+            result = {
+                "type": "location",
+                "latitude":
+                    location.get("latitude"),
+
+                "longitude":
+                    location.get("longitude"),
+            }
+
+            if (
+                location.get(
+                    "horizontal_accuracy"
+                )
+                is not None
+            ):
+                result[
+                    "horizontal_accuracy"
+                ] = location[
+                    "horizontal_accuracy"
+                ]
+
+            return result
+
+        if media.get("venue"):
+            venue = media["venue"]
+
+            result = {
+                "type": "venue",
+
+                "latitude":
+                    venue.get(
+                        "location",
+                        {}
+                    ).get(
+                        "latitude"
+                    ),
+
+                "longitude":
+                    venue.get(
+                        "location",
+                        {}
+                    ).get(
+                        "longitude"
+                    ),
+
+                "title":
+                    venue.get(
+                        "title",
+                        "Venue"
+                    ),
+
+                "address":
+                    venue.get(
+                        "address",
+                        ""
+                    ),
+            }
+
+            for key in (
+                "foursquare_id",
+                "foursquare_type",
+                "google_place_id",
+                "google_place_type",
+            ):
+                if venue.get(key):
+                    result[key] = venue[key]
+
+            return result
+
+        if media.get(
+            "sticker",
+            {}
+        ).get("file_id"):
+
+            return {
+                "type": "sticker",
+                "file_id":
+                    media["sticker"]["file_id"],
+
+                "emoji":
+                    media["sticker"].get(
+                        "emoji"
+                    ),
+            }
+
+        for kind in (
+            "animation",
+            "video",
+            "audio",
+            "document"
+        ):
+            item = media.get(kind)
+
+            if (
+                item
+                and item.get("file_id")
+            ):
+                return {
+                    "type": kind,
+                    "file_id":
+                        item["file_id"],
+                }
+
+        if media.get("photo"):
+            photos = media["photo"]
+
+            photo = max(
+                photos,
+                key=lambda item:
+                    int(
+                        item.get(
+                            "file_size"
+                        )
+                        or 0
+                    )
+            )
+
+            if photo.get("file_id"):
+                return {
+                    "type": "photo",
+                    "file_id":
+                        photo["file_id"],
+                }
+
+        if media.get("live_photo"):
+            live = media[
+                "live_photo"
+            ]
+
+            photos = live.get(
+                "photo"
+            ) or []
+
+            photo = (
+                max(
+                    photos,
+                    key=lambda item:
+                        int(
+                            item.get(
+                                "file_size"
+                            )
+                            or 0
+                        )
+                )
+                if photos
+                else None
+            )
+
+            video = (
+                live.get("video")
+                or {}
+            )
+
+            if (
+                photo
+                and photo.get("file_id")
+                and video.get("file_id")
+            ):
+                return {
+                    "type":
+                        "live_photo",
+
+                    "photo_file_id":
+                        photo["file_id"],
+
+                    "video_file_id":
+                        video["file_id"],
+                }
+
+        return None
+
+
+    @staticmethod
+    def _auto_poll_input_media(
+        spec,
+        prefix,
+        files
+    ):
+        """
+        Build one Bot API InputPollMedia /
+        InputPollOptionMedia object.
+        """
+
+        if not spec:
+            return None
+
+        media_type = spec.get(
+            "type"
+        )
+
+        # ------------------------------------------------------------
+        # LINK
+        # ------------------------------------------------------------
+
+        if media_type == "link":
+            return {
+                "type": "link",
+                "url":
+                    spec.get(
+                        "url",
+                        ""
+                    ),
+            }
+
+        # ------------------------------------------------------------
+        # LOCATION
+        # ------------------------------------------------------------
+
+        if media_type == "location":
+            result = {
+                "type": "location",
+
+                "latitude":
+                    spec.get(
+                        "latitude"
+                    ),
+
+                "longitude":
+                    spec.get(
+                        "longitude"
+                    ),
+            }
+
+            if (
+                spec.get(
+                    "horizontal_accuracy"
+                )
+                is not None
+            ):
+                result[
+                    "horizontal_accuracy"
+                ] = spec[
+                    "horizontal_accuracy"
+                ]
+
+            return result
+
+        # ------------------------------------------------------------
+        # VENUE
+        # ------------------------------------------------------------
+
+        if media_type == "venue":
+            result = {
+                "type": "venue",
+
+                "latitude":
+                    spec.get(
+                        "latitude"
+                    ),
+
+                "longitude":
+                    spec.get(
+                        "longitude"
+                    ),
+
+                "title":
+                    spec.get(
+                        "title",
+                        "Venue"
+                    ),
+
+                "address":
+                    spec.get(
+                        "address",
+                        ""
+                    ),
+            }
+
+            for key in (
+                "foursquare_id",
+                "foursquare_type",
+                "google_place_id",
+                "google_place_type",
+            ):
+                if spec.get(key):
+                    result[key] = spec[key]
+
+            return result
+
+        # ------------------------------------------------------------
+        # LIVE PHOTO
+        # ------------------------------------------------------------
+
+        if media_type == "live_photo":
+            result = {
+                "type":
+                    "live_photo"
+            }
+
+            if spec.get(
+                "video_file_id"
+            ):
+                result["media"] = (
+                    spec[
+                        "video_file_id"
+                    ]
+                )
+
+            else:
+                video_name = (
+                    f"{prefix}_video"
+                )
+
+                files[
+                    video_name
+                ] = (
+                    spec.get(
+                        "video_filename",
+                        "poll_live_photo.mp4"
+                    ),
+                    spec.get(
+                        "video_bytes",
+                        b""
+                    ),
+                    spec.get(
+                        "video_mime",
+                        "video/mp4"
+                    ),
+                )
+
+                result["media"] = (
+                    f"attach://{video_name}"
+                )
+
+            if spec.get(
+                "photo_file_id"
+            ):
+                result["photo"] = (
+                    spec[
+                        "photo_file_id"
+                    ]
+                )
+
+            else:
+                photo_name = (
+                    f"{prefix}_photo"
+                )
+
+                files[
+                    photo_name
+                ] = (
+                    spec.get(
+                        "photo_filename",
+                        "poll_live_photo.jpg"
+                    ),
+                    spec.get(
+                        "photo_bytes",
+                        b""
+                    ),
+                    spec.get(
+                        "photo_mime",
+                        "image/jpeg"
+                    ),
+                )
+
+                result["photo"] = (
+                    f"attach://{photo_name}"
+                )
+
+            return result
+
+        # ------------------------------------------------------------
+        # ALREADY-UPLOADED FILE
+        # ------------------------------------------------------------
+
+        file_id = spec.get(
+            "file_id"
+        )
+
+        if file_id:
+            result = {
+                "type":
+                    media_type,
+
+                "media":
+                    file_id,
+            }
+
+            if (
+                media_type == "sticker"
+                and spec.get("emoji")
+            ):
+                result["emoji"] = (
+                    spec["emoji"]
+                )
+
+            return result
+
+        # ------------------------------------------------------------
+        # NEW FILE UPLOAD
+        # ------------------------------------------------------------
+
+        if media_type in {
+            "animation",
+            "photo",
+            "sticker",
+            "video",
+            "audio",
+            "document",
+        }:
+            file_name = (
+                f"{prefix}_file"
+            )
+
+            files[
+                file_name
+            ] = (
+                spec.get(
+                    "filename",
+                    f"poll_{media_type}"
+                ),
+                spec.get(
+                    "bytes",
+                    b""
+                ),
+                spec.get(
+                    "mime",
+                    "application/octet-stream"
+                ),
+            )
+
+            result = {
+                "type":
+                    media_type,
+
+                "media":
+                    f"attach://{file_name}",
+            }
+
+            if (
+                media_type == "sticker"
+                and spec.get("emoji")
+            ):
+                result["emoji"] = (
+                    spec["emoji"]
+                )
+
+            return result
+
+        return None
+
+
+    async def _send_auto_quiz_poll(
+        self,
+        bot,
+        chat_id,
+        question,
+        options,
+        correct_option,
+        media_snapshot=None,
+        media_cache=None,
+    ):
+        """
+        Automatic quiz sender.
+
+        Uses the current Telegram Bot API directly because
+        the project's PTB 22.3 predates poll-media support.
+        Existing manual quiz sending remains untouched.
+        """
+
+        token = getattr(
+            bot,
+            "token",
+            None
+        )
+
+        if not token:
+            raise RuntimeError(
+                "Automatic quiz bot token is unavailable"
+            )
+
+        if media_cache is None:
+            media_cache = {}
+
+        files = {}
+        payload_options = []
+
+        # ============================================================
+        # QUESTION MEDIA
+        # ============================================================
+
+        input_question_media = (
+            media_cache.get(
+                "question"
+            )
+        )
+
+        if (
+            input_question_media is None
+            and media_snapshot
+        ):
+            input_question_media = (
+                self._auto_poll_input_media(
+                    media_snapshot.get(
+                        "question"
+                    ),
+                    "auto_q",
+                    files
+                )
+            )
+
+        # ============================================================
+        # OPTION MEDIA
+        # ============================================================
+
+        cached_options = (
+            media_cache.get(
+                "options"
+            )
+            or {}
+        )
+
+        source_option_media = (
+            media_snapshot.get(
+                "options",
+                []
+            )
+            if media_snapshot
+            else []
+        )
+
+        for index, option_text in enumerate(
+            options
+        ):
+            item = {
+                "text":
+                    str(option_text)
+            }
+
+            option_media = (
+                cached_options.get(
+                    index
+                )
+            )
+
+            if (
+                option_media is None
+                and index < len(
+                    source_option_media
+                )
+            ):
+                option_media = (
+                    self._auto_poll_input_media(
+                        source_option_media[
+                            index
+                        ],
+                        f"auto_o_{index}",
+                        files
+                    )
+                )
+
+            if option_media:
+                item["media"] = (
+                    option_media
+                )
+
+            payload_options.append(
+                item
+            )
+
+        # ============================================================
+        # BOT API PAYLOAD
+        # ============================================================
+
+        data = {
+            "chat_id":
+                int(chat_id),
+
+            "question":
+                str(question),
+
+            "options":
+                json.dumps(
+                    payload_options,
+                    ensure_ascii=False
+                ),
+
+            "is_anonymous":
+                "false",
+
+            "type":
+                "quiz",
+
+            "correct_option_ids":
+                json.dumps(
+                    [int(correct_option)]
+                ),
+
+            "explanation":
+                "📚 NEET Quiz Bot",
+        }
+
+        if input_question_media:
+            data["media"] = json.dumps(
+                input_question_media,
+                ensure_ascii=False
+            )
+
+        url = (
+            f"https://api.telegram.org/"
+            f"bot{token}/sendPoll"
+        )
+
+        async with httpx.AsyncClient(
+            timeout=90.0
+        ) as client:
+
+            response = await client.post(
+                url,
+                data=data,
+                files=files or None,
+            )
+
+        response.raise_for_status()
+
+        body = response.json()
+
+        if not body.get("ok"):
+            raise RuntimeError(
+                body.get(
+                    "description"
+                )
+                or
+                "Telegram sendPoll failed"
+            )
+
+        result = (
+            body.get("result")
+            or {}
+        )
+
+        poll = (
+            result.get("poll")
+            or {}
+        )
+
+        poll_id = poll.get(
+            "id"
+        )
+
+        message_id = result.get(
+            "message_id"
+        )
+
+        if (
+            not poll_id
+            or message_id is None
+        ):
+            raise RuntimeError(
+                "Telegram sendPoll returned "
+                "an incomplete message"
+            )
+
+        # ============================================================
+        # CACHE BOT-SPECIFIC FILE IDs
+        # ============================================================
+
+        if not media_cache.get(
+            "question"
+        ):
+            returned_question = (
+                self._auto_poll_media_from_response(
+                    poll.get(
+                        "media"
+                    )
+                )
+            )
+
+            if returned_question:
+                media_cache[
+                    "question"
+                ] = returned_question
+
+        option_cache = (
+            media_cache.setdefault(
+                "options",
+                {}
+            )
+        )
+
+        for index, poll_option in enumerate(
+            poll.get(
+                "options"
+            )
+            or []
+        ):
+            returned = (
+                self._auto_poll_media_from_response(
+                    poll_option.get(
+                        "media"
+                    )
+                )
+            )
+
+            if returned:
+                option_cache[
+                    index
+                ] = returned
+
+        return {
+            "message_id":
+                int(message_id),
+
+            "poll_id":
+                str(poll_id),
+
+            "raw":
+                result,
+        }
+
     async def _broadcast_auto_quiz(
         self,
         context: ContextTypes.DEFAULT_TYPE,
@@ -1394,6 +2126,30 @@ Let's ace NEET together! 🚀
                 auto_quiz_id
             )
         )
+
+        # Read original source poll media once.
+        media_snapshot = None
+
+        try:
+            media_snapshot = (
+                await auto_quiz_reader.get_auto_quiz_media_snapshot(
+                    source_chat_id=quiz[
+                        "source_chat_id"
+                    ],
+                    source_message_id=quiz[
+                        "source_message_id"
+                    ]
+                )
+            )
+
+        except Exception:
+            logger.exception(
+                "AUTO QUIZ source media load failed | id=%s",
+                auto_quiz_id
+            )
+
+        # Main bot has its own Telegram file-ID namespace.
+        main_media_cache = {}
 
         main_group_sent = 0
         main_channel_sent = 0
@@ -1494,14 +2250,66 @@ Let's ace NEET together! 🚀
                     "\n\n【~@DrQuizRobot】"
                 )
 
-                sent = await context.bot.send_poll(
+                sent = await self._send_auto_quiz_poll(
+                    bot=context.bot,
                     chat_id=chat["id"],
                     question=quiz_question,
                     options=quiz_options,
-                    type="quiz",
-                    correct_option_id=correct_option,
-                    is_anonymous=False,
-                    explanation="📚 NEET Quiz Bot"
+                    correct_option=correct_option,
+                    media_snapshot=media_snapshot,
+                    media_cache=main_media_cache,
+                )
+
+                sent_poll_id = sent[
+                    "poll_id"
+                ]
+
+                sent_message_id = sent[
+                    "message_id"
+                ]
+
+                # Existing scoring engine remains unchanged.
+                self.quiz_data[
+                    scoring_quiz_id
+                ] = {
+                    "correct_option":
+                        correct_option,
+
+                    "question":
+                        question,
+
+                    "options":
+                        options,
+
+                    "message_id":
+                        sent_message_id,
+
+                    "poll_object":
+                        None
+                }
+
+                self.poll_mapping[
+                    sent_poll_id
+                ] = {
+                    "quiz_id":
+                        scoring_quiz_id,
+
+                    "group_id":
+                        chat["id"],
+
+                    "message_id":
+                        sent_message_id
+                }
+
+                # Persist mapping so Render restart
+                # does not lose this automatic poll.
+                await db.add_poll_mapping(
+                    poll_id=sent_poll_id,
+                    quiz_id=scoring_quiz_id,
+                    group_id=chat["id"],
+                    message_id=sent_message_id,
+                    clone_bot_id=0,
+                    correct_option=correct_option
                 )
 
                 # Existing scoring engine gets a real quiz ID.
@@ -1583,6 +2391,10 @@ Let's ace NEET together! 🚀
                 clone_bot_id
             )
 
+            # Telegram file_ids are bot-specific.
+            # Every clone therefore gets its own cache.
+            clone_media_cache = {}
+
             for cgroup in clone_groups:
 
                 try:
@@ -1661,23 +2473,34 @@ Let's ace NEET together! 🚀
                     )
 
                     c_sent = (
-                        await instance.application.bot.send_poll(
+                        await self._send_auto_quiz_poll(
+                            bot=instance.application.bot,
                             chat_id=cgroup["id"],
                             question=c_question,
                             options=c_options,
-                            type="quiz",
-                            correct_option_id=correct_option,
-                            is_anonymous=False,
-                            explanation="📚 Quiz Bot"
+                            correct_option=correct_option,
+                            media_snapshot=media_snapshot,
+                            media_cache=clone_media_cache,
                         )
                     )
 
                     await db.add_poll_mapping(
-                        poll_id=c_sent.poll.id,
+                        poll_id=c_sent[
+                            "poll_id"
+                        ],
+
                         quiz_id=scoring_quiz_id,
-                        group_id=cgroup["id"],
-                        message_id=c_sent.message_id,
+
+                        group_id=cgroup[
+                            "id"
+                        ],
+
+                        message_id=c_sent[
+                            "message_id"
+                        ],
+
                         clone_bot_id=clone_bot_id,
+
                         correct_option=correct_option
                     )
 
