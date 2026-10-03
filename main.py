@@ -14,6 +14,7 @@ import pytz
 from telegram import (
     Bot,
     InputTextMessageContent,
+    InputPollOption,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
@@ -2715,6 +2716,8 @@ Let's ace NEET together! 🚀
                 
                 # Store quiz in database with placeholder correct_option (-1 means unset)
                 options = [option.text for option in poll.options]
+                media_options = (self._management_poll_options_with_media(poll)
+                                )
                 quiz_id = await db.add_quiz(
                     message_id=message.message_id,
                     from_group_id=chat.id,
@@ -2762,7 +2765,16 @@ Let's ace NEET together! 🚀
             logger.info(f"✅ Quiz has correct_option_id: {correct_option_id}")
             
             # Store quiz in database
-            options = [option.text for option in poll.options]
+            options = [
+                option.text
+                for option in poll.options
+            ]
+            
+            media_options = (
+                self._management_poll_options_with_media(
+                    poll
+                )
+            )
             quiz_id = await db.add_quiz(
                 message_id=message.message_id,
                 from_group_id=chat.id,
@@ -2776,6 +2788,7 @@ Let's ace NEET together! 🚀
                 'correct_option': correct_option_id,
                 'question': poll.question,
                 'options': options,
+                'media_options': media_options,
                 'message_id': message.message_id,
                 'poll_object': poll
             }
@@ -2797,6 +2810,393 @@ Let's ace NEET together! 🚀
             data={'quiz_id': quiz_id}
         )
         logger.info(f"⏰ Quiz {quiz_id} scheduled for forwarding in 30 seconds")
+
+    @staticmethod
+    def _management_poll_media_to_input(media):
+        """
+        Convert Telegram PollMedia received from the
+        Quiz Management Group into a sendable media object.
+
+        PTB 22.8+ exposes Poll.media and PollOption.media.
+        The returned object is directly usable by send_poll().
+        """
+
+        if not media:
+            return None
+
+        # ------------------------------------------------------------
+        # PHOTO
+        # ------------------------------------------------------------
+
+        if getattr(media, "photo", None):
+            photos = media.photo
+
+            if not photos:
+                return None
+
+            # Largest available Telegram photo.
+            photo = max(
+                photos,
+                key=lambda item: (
+                    int(
+                        getattr(
+                            item,
+                            "width",
+                            0
+                        )
+                    )
+                    *
+                    int(
+                        getattr(
+                            item,
+                            "height",
+                            0
+                        )
+                    )
+                )
+            )
+
+            file_id = getattr(
+                photo,
+                "file_id",
+                None
+            )
+
+            if file_id:
+                return {
+                    "type": "photo",
+                    "media": file_id
+                }
+
+        # ------------------------------------------------------------
+        # VIDEO
+        # ------------------------------------------------------------
+
+        video = getattr(
+            media,
+            "video",
+            None
+        )
+
+        if video:
+            file_id = getattr(
+                video,
+                "file_id",
+                None
+            )
+
+            if file_id:
+                return {
+                    "type": "video",
+                    "media": file_id
+                }
+
+        # ------------------------------------------------------------
+        # ANIMATION / GIF
+        # ------------------------------------------------------------
+
+        animation = getattr(
+            media,
+            "animation",
+            None
+        )
+
+        if animation:
+            file_id = getattr(
+                animation,
+                "file_id",
+                None
+            )
+
+            if file_id:
+                return {
+                    "type": "animation",
+                    "media": file_id
+                }
+
+        # ------------------------------------------------------------
+        # STICKER
+        # ------------------------------------------------------------
+
+        sticker = getattr(
+            media,
+            "sticker",
+            None
+        )
+
+        if sticker:
+            file_id = getattr(
+                sticker,
+                "file_id",
+                None
+            )
+
+            if file_id:
+                result = {
+                    "type": "sticker",
+                    "media": file_id
+                }
+
+                emoji = getattr(
+                    sticker,
+                    "emoji",
+                    None
+                )
+
+                if emoji:
+                    result["emoji"] = emoji
+
+                return result
+
+        # ------------------------------------------------------------
+        # LOCATION
+        # ------------------------------------------------------------
+
+        location = getattr(
+            media,
+            "location",
+            None
+        )
+
+        if location:
+            result = {
+                "type": "location",
+
+                "latitude": float(
+                    location.latitude
+                ),
+
+                "longitude": float(
+                    location.longitude
+                )
+            }
+
+            horizontal_accuracy = getattr(
+                location,
+                "horizontal_accuracy",
+                None
+            )
+
+            if horizontal_accuracy is not None:
+                result[
+                    "horizontal_accuracy"
+                ] = horizontal_accuracy
+
+            return result
+
+        # ------------------------------------------------------------
+        # VENUE
+        # ------------------------------------------------------------
+
+        venue = getattr(
+            media,
+            "venue",
+            None
+        )
+
+        if venue:
+            venue_location = getattr(
+                venue,
+                "location",
+                None
+            )
+
+            if venue_location:
+                result = {
+                    "type": "venue",
+
+                    "latitude": float(
+                        venue_location.latitude
+                    ),
+
+                    "longitude": float(
+                        venue_location.longitude
+                    ),
+
+                    "title": str(
+                        getattr(
+                            venue,
+                            "title",
+                            ""
+                        )
+                        or "Venue"
+                    ),
+
+                    "address": str(
+                        getattr(
+                            venue,
+                            "address",
+                            ""
+                        )
+                        or ""
+                    )
+                }
+
+                for key in (
+                    "foursquare_id",
+                    "foursquare_type",
+                    "google_place_id",
+                    "google_place_type",
+                ):
+                    value = getattr(
+                        venue,
+                        key,
+                        None
+                    )
+
+                    if value:
+                        result[key] = value
+
+                return result
+
+        # ------------------------------------------------------------
+        # LIVE PHOTO
+        # ------------------------------------------------------------
+
+        live_photo = getattr(
+            media,
+            "live_photo",
+            None
+        )
+
+        if live_photo:
+            photo = getattr(
+                live_photo,
+                "photo",
+                None
+            )
+
+            video = getattr(
+                live_photo,
+                "video",
+                None
+            )
+
+            if (
+                photo
+                and video
+            ):
+                photos = getattr(
+                    photo,
+                    "photo",
+                    None
+                ) or []
+
+                if photos:
+                    largest_photo = max(
+                        photos,
+                        key=lambda item: (
+                            int(
+                                getattr(
+                                    item,
+                                    "width",
+                                    0
+                                )
+                            )
+                            *
+                            int(
+                                getattr(
+                                    item,
+                                    "height",
+                                    0
+                                )
+                            )
+                        )
+                    )
+
+                    photo_file_id = getattr(
+                        largest_photo,
+                        "file_id",
+                        None
+                    )
+
+                    video_file_id = getattr(
+                        video,
+                        "file_id",
+                        None
+                    )
+
+                    if (
+                        photo_file_id
+                        and video_file_id
+                    ):
+                        return {
+                            "type":
+                                "live_photo",
+
+                            "photo":
+                                photo_file_id,
+
+                            "video":
+                                video_file_id
+                        }
+
+        # ------------------------------------------------------------
+        # AUDIO / DOCUMENT
+        # ------------------------------------------------------------
+
+        # Telegram currently doesn't expose these as
+        # poll-option media. Keep them safely unsupported.
+        if (
+            getattr(
+                media,
+                "audio",
+                None
+            )
+            or
+            getattr(
+                media,
+                "document",
+                None
+            )
+        ):
+            logger.warning(
+                "Poll media type audio/document "
+                "cannot be used as poll option media"
+            )
+
+        return None
+
+
+    @classmethod
+    def _management_poll_options_with_media(
+        cls,
+        poll
+    ):
+        """
+        Preserve option text + option media from
+        the original Management Group poll.
+        """
+
+        result = []
+
+        for option in (
+            poll.options
+            or ()
+        ):
+            media = cls._management_poll_media_to_input(
+                getattr(
+                    option,
+                    "media",
+                    None
+                )
+            )
+
+            if media:
+                result.append(
+                    InputPollOption(
+                        text=option.text,
+                        media=media
+                    )
+                )
+            else:
+                result.append(
+                    InputPollOption(
+                        text=option.text
+                    )
+                )
+
+        return result
     
     async def _forward_quiz_to_groups(self, context: ContextTypes.DEFAULT_TYPE):
         """Forward quiz to all groups and channels"""
@@ -2829,6 +3229,13 @@ Let's ace NEET together! 🚀
             
             poll = quiz_data['poll_object']
             options = quiz_data['options']
+
+            media_options = (
+                quiz_data.get(
+                    'media_options'
+                )
+                or []
+            )
             
             for chat in all_chats:
                 if chat['id'] != ADMIN_GROUP_ID:  # Don't send back to admin group
