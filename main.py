@@ -28,10 +28,16 @@ from telegram import (
     Update,
     BotCommand,
     BotCommandScopeChat,
+    InputMediaAnimation,
+    InputMediaLivePhoto,
     InputMediaPhoto,
+    InputMediaSticker,
     InputMediaVideo,
     InputMediaAudio, 
     InputMediaDocument,
+    InputMediaLocation,
+    InputMediaVenue,
+    InputPollMedia,
     Poll,
     PollAnswer,
     ChatMember,
@@ -2811,48 +2817,26 @@ Let's ace NEET together! 🚀
         )
         logger.info(f"⏰ Quiz {quiz_id} scheduled for forwarding in 30 seconds")
 
-    @staticmethod
-    def _management_poll_media_to_input(media):
-        """
-        Convert Telegram PollMedia received from the
-        Quiz Management Group into a sendable media object.
+@staticmethod
+def _management_poll_media_to_input(media):
+    """
+    Convert incoming PollMedia into the correct
+    PTB InputPollOptionMedia / InputPollMedia object.
+    """
 
-        PTB 22.8+ exposes Poll.media and PollOption.media.
-        The returned object is directly usable by send_poll().
-        """
+    if not media:
+        return None
 
-        if not media:
-            return None
+    # PHOTO
+    if getattr(media, "photo", None):
+        photos = media.photo
 
-        # ------------------------------------------------------------
-        # PHOTO
-        # ------------------------------------------------------------
-
-        if getattr(media, "photo", None):
-            photos = media.photo
-
-            if not photos:
-                return None
-
-            # Largest available Telegram photo.
+        if photos:
             photo = max(
                 photos,
-                key=lambda item: (
-                    int(
-                        getattr(
-                            item,
-                            "width",
-                            0
-                        )
-                    )
-                    *
-                    int(
-                        getattr(
-                            item,
-                            "height",
-                            0
-                        )
-                    )
+                key=lambda x: (
+                    int(getattr(x, "width", 0))
+                    * int(getattr(x, "height", 0))
                 )
             )
 
@@ -2863,299 +2847,223 @@ Let's ace NEET together! 🚀
             )
 
             if file_id:
-                return {
-                    "type": "photo",
-                    "media": file_id
-                }
+                return InputMediaPhoto(
+                    media=file_id
+                )
 
-        # ------------------------------------------------------------
-        # VIDEO
-        # ------------------------------------------------------------
+    # VIDEO
+    video = getattr(
+        media,
+        "video",
+        None
+    )
 
-        video = getattr(
-            media,
-            "video",
+    if video:
+        file_id = getattr(
+            video,
+            "file_id",
             None
         )
 
-        if video:
-            file_id = getattr(
-                video,
-                "file_id",
-                None
+        if file_id:
+            return InputMediaVideo(
+                media=file_id
             )
 
-            if file_id:
-                return {
-                    "type": "video",
-                    "media": file_id
-                }
+    # ANIMATION / GIF
+    animation = getattr(
+        media,
+        "animation",
+        None
+    )
 
-        # ------------------------------------------------------------
-        # ANIMATION / GIF
-        # ------------------------------------------------------------
-
-        animation = getattr(
-            media,
-            "animation",
+    if animation:
+        file_id = getattr(
+            animation,
+            "file_id",
             None
         )
 
-        if animation:
-            file_id = getattr(
-                animation,
-                "file_id",
-                None
+        if file_id:
+            return InputMediaAnimation(
+                media=file_id
             )
 
-            if file_id:
-                return {
-                    "type": "animation",
-                    "media": file_id
-                }
+    # STICKER
+    sticker = getattr(
+        media,
+        "sticker",
+        None
+    )
 
-        # ------------------------------------------------------------
-        # STICKER
-        # ------------------------------------------------------------
-
-        sticker = getattr(
-            media,
-            "sticker",
+    if sticker:
+        file_id = getattr(
+            sticker,
+            "file_id",
             None
         )
 
-        if sticker:
-            file_id = getattr(
-                sticker,
-                "file_id",
-                None
-            )
-
-            if file_id:
-                result = {
-                    "type": "sticker",
-                    "media": file_id
-                }
-
-                emoji = getattr(
+        if file_id:
+            return InputMediaSticker(
+                media=file_id,
+                emoji=getattr(
                     sticker,
                     "emoji",
                     None
                 )
+            )
 
-                if emoji:
-                    result["emoji"] = emoji
+    # LOCATION
+    location = getattr(
+        media,
+        "location",
+        None
+    )
 
-                return result
+    if location:
+        return InputMediaLocation(
+            latitude=float(
+                location.latitude
+            ),
+            longitude=float(
+                location.longitude
+            ),
+            horizontal_accuracy=getattr(
+                location,
+                "horizontal_accuracy",
+                None
+            )
+        )
 
-        # ------------------------------------------------------------
-        # LOCATION
-        # ------------------------------------------------------------
+    # VENUE
+    venue = getattr(
+        media,
+        "venue",
+        None
+    )
 
+    if venue:
         location = getattr(
-            media,
+            venue,
             "location",
             None
         )
 
         if location:
-            result = {
-                "type": "location",
-
-                "latitude": float(
+            return InputMediaVenue(
+                latitude=float(
                     location.latitude
                 ),
-
-                "longitude": float(
+                longitude=float(
                     location.longitude
-                )
-            }
-
-            horizontal_accuracy = getattr(
-                location,
-                "horizontal_accuracy",
-                None
-            )
-
-            if horizontal_accuracy is not None:
-                result[
-                    "horizontal_accuracy"
-                ] = horizontal_accuracy
-
-            return result
-
-        # ------------------------------------------------------------
-        # VENUE
-        # ------------------------------------------------------------
-
-        venue = getattr(
-            media,
-            "venue",
-            None
-        )
-
-        if venue:
-            venue_location = getattr(
-                venue,
-                "location",
-                None
-            )
-
-            if venue_location:
-                result = {
-                    "type": "venue",
-
-                    "latitude": float(
-                        venue_location.latitude
-                    ),
-
-                    "longitude": float(
-                        venue_location.longitude
-                    ),
-
-                    "title": str(
-                        getattr(
-                            venue,
-                            "title",
-                            ""
-                        )
-                        or "Venue"
-                    ),
-
-                    "address": str(
-                        getattr(
-                            venue,
-                            "address",
-                            ""
-                        )
-                        or ""
-                    )
-                }
-
-                for key in (
-                    "foursquare_id",
-                    "foursquare_type",
-                    "google_place_id",
-                    "google_place_type",
-                ):
-                    value = getattr(
+                ),
+                title=str(
+                    getattr(
                         venue,
-                        key,
-                        None
+                        "title",
+                        ""
                     )
+                ),
+                address=str(
+                    getattr(
+                        venue,
+                        "address",
+                        ""
+                    )
+                ),
+                foursquare_id=getattr(
+                    venue,
+                    "foursquare_id",
+                    None
+                ),
+                foursquare_type=getattr(
+                    venue,
+                    "foursquare_type",
+                    None
+                ),
+                google_place_id=getattr(
+                    venue,
+                    "google_place_id",
+                    None
+                ),
+                google_place_type=getattr(
+                    venue,
+                    "google_place_type",
+                    None
+                )
+            )
 
-                    if value:
-                        result[key] = value
+    # LIVE PHOTO
+    live_photo = getattr(
+        media,
+        "live_photo",
+        None
+    )
 
-                return result
-
-        # ------------------------------------------------------------
-        # LIVE PHOTO
-        # ------------------------------------------------------------
-
-        live_photo = getattr(
-            media,
-            "live_photo",
+    if live_photo:
+        video = getattr(
+            live_photo,
+            "video",
             None
         )
 
-        if live_photo:
-            photo = getattr(
-                live_photo,
+        photo = getattr(
+            live_photo,
+            "photo",
+            None
+        )
+
+        if video and photo:
+            photos = getattr(
+                photo,
                 "photo",
                 None
-            )
+            ) or []
 
-            video = getattr(
-                live_photo,
-                "video",
-                None
-            )
-
-            if (
-                photo
-                and video
-            ):
-                photos = getattr(
-                    photo,
-                    "photo",
-                    None
-                ) or []
-
-                if photos:
-                    largest_photo = max(
-                        photos,
-                        key=lambda item: (
-                            int(
-                                getattr(
-                                    item,
-                                    "width",
-                                    0
-                                )
+            if photos:
+                largest = max(
+                    photos,
+                    key=lambda x: (
+                        int(
+                            getattr(
+                                x,
+                                "width",
+                                0
                             )
-                            *
-                            int(
-                                getattr(
-                                    item,
-                                    "height",
-                                    0
-                                )
+                        )
+                        *
+                        int(
+                            getattr(
+                                x,
+                                "height",
+                                0
                             )
                         )
                     )
+                )
 
-                    photo_file_id = getattr(
-                        largest_photo,
-                        "file_id",
-                        None
+                photo_file_id = getattr(
+                    largest,
+                    "file_id",
+                    None
+                )
+
+                video_file_id = getattr(
+                    video,
+                    "file_id",
+                    None
+                )
+
+                if (
+                    photo_file_id
+                    and video_file_id
+                ):
+                    return InputMediaLivePhoto(
+                        media=video_file_id,
+                        photo=photo_file_id
                     )
 
-                    video_file_id = getattr(
-                        video,
-                        "file_id",
-                        None
-                    )
-
-                    if (
-                        photo_file_id
-                        and video_file_id
-                    ):
-                        return {
-                            "type":
-                                "live_photo",
-
-                            "photo":
-                                photo_file_id,
-
-                            "video":
-                                video_file_id
-                        }
-
-        # ------------------------------------------------------------
-        # AUDIO / DOCUMENT
-        # ------------------------------------------------------------
-
-        # Telegram currently doesn't expose these as
-        # poll-option media. Keep them safely unsupported.
-        if (
-            getattr(
-                media,
-                "audio",
-                None
-            )
-            or
-            getattr(
-                media,
-                "document",
-                None
-            )
-        ):
-            logger.warning(
-                "Poll media type audio/document "
-                "cannot be used as poll option media"
-            )
-
-        return None
+    return None
 
 
     @classmethod
@@ -3307,11 +3215,29 @@ Let's ace NEET together! 🚀
 
                             if source_media:
                                 send_options.append(
-                                    InputPollOption(
-                                        text=option_text,
-                                        media=source_media.get(
-                                            "media"
+                                    media_object = (
+                                        self._management_poll_media_to_input(
+                                            getattr(
+                                                option,
+                                                "media",
+                                                None
+                                            )
                                         )
+                                    )
+                                    
+                                    if media_object:
+                                        send_options.append(
+                                            InputPollOption(
+                                                text=option.text,
+                                                media=media_object
+                                            )
+                                        )
+                                    else:
+                                        send_options.append(
+                                            InputPollOption(
+                                                text=option.text
+                                            )
+                                        )                                    
                                     )
                                 )
                             else:
