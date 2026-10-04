@@ -2274,6 +2274,14 @@ Let's ace NEET together! 🚀
                     "message_id"
                 ]
 
+                # Count delivery immediately after Telegram accepts the poll.
+                # Post-send bookkeeping failures must not turn a real delivery
+                # into a false zero in the admin report.
+                if chat.get("type") == "channel":
+                    main_channel_sent += 1
+                else:
+                    main_group_sent += 1
+
                 # Existing scoring engine remains unchanged.
                 self.quiz_data[
                     scoring_quiz_id
