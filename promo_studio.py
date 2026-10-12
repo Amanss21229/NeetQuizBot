@@ -375,7 +375,7 @@ async def deeplink_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register(bot_instance):
     """
     start_with_promo.py isse call karta hai. bot_instance = NEETQuizBot object.
-    Handlers group -2 mein jaate hain, taaki main.py ke handlers se pehle chalen
+    Handlers group -3 mein jaate hain (main.py ka gate group -2 mein hai), taaki main.py ke handlers se pehle chalen
     aur unse takrayen nahi.
     """
     app = bot_instance.application
@@ -385,7 +385,7 @@ def register(bot_instance):
     if ai_handler:
         DEEPLINKS["ai"] = ai_handler
 
-    app.add_handler(CommandHandler("promo", promo_command), group=-2)
-    app.add_handler(CallbackQueryHandler(promo_callback, pattern=r"^promo_(send:|no$)"), group=-2)
-    app.add_handler(CommandHandler("start", deeplink_start), group=-2)
+    app.add_handler(CommandHandler("promo", promo_command), group=-3)
+    app.add_handler(CallbackQueryHandler(promo_callback, pattern=r"^promo_(send:|no$)"), group=-3)
+    app.add_handler(CommandHandler("start", deeplink_start), group=-3)
     logger.info("promo_studio loaded: %d post(s)", len(POSTS))
