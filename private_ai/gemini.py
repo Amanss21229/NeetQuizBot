@@ -56,6 +56,9 @@ class GeminiProvider:
         self,
         messages: Sequence[ChatMessage],
         system_prompt: str,
+        *,
+        max_output_tokens: int = 1200,
+        timeout_seconds: int = 45,
     ) -> str:
 
         contents = [
@@ -76,7 +79,7 @@ class GeminiProvider:
 
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            max_output_tokens=1200,
+            max_output_tokens=max_output_tokens,
         )
 
         last_error = None
@@ -101,7 +104,7 @@ class GeminiProvider:
                             contents=contents,
                             config=config,
                         ),
-                        timeout=45
+                        timeout=timeout_seconds
                     )
 
                     text = getattr(
