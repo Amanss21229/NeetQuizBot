@@ -79,6 +79,7 @@ from urllib.parse import quote
 from private_ai import PrivateAI, ChatMessage
 from private_ai.gemini import GeminiProvider
 from auto_quiz_reader import auto_quiz_reader
+from ai_quiz_arena import QuizArena
 
 
 # Bot configuration
@@ -334,6 +335,7 @@ class NEETQuizBot:
         self.ai_provider = None
         self.ai_histories = {}
         self.ai_request_locks = {}
+        self.quiz_arena = None
     
     async def _parallel_send(self, send_func, chat_ids: List, status_msg=None, context=None, label="Sending", 
                              track_messages=False, original_message_id=None, original_chat_id=None, sent_by=None):
@@ -547,28 +549,26 @@ Hello! To use this bot, you need to join our official groups/channels first.
         except:
             pass  # Admin might already exist
 
-                # Initialize Private AI only when explicitly enabled.
-        # This subsystem belongs only to the main bot.
-        if PRIVATE_AI_ENABLED:
-            gemini_api_key = os.environ.get("GEMINI_API_KEY")
-
-            if not gemini_api_key:
-                raise RuntimeError(
-                    "PRIVATE_AI_ENABLED=true but GEMINI_API_KEY is missing"
-                )
-
+        # Gemini provider is also used by the independent NEET Quiz Arena.
+        gemini_api_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_api_key:
             self.ai_provider = GeminiProvider(
-                api_key=gemini_api_key
+                api_key=gemini_api_key,
+                model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
             )
+        elif PRIVATE_AI_ENABLED:
+            raise RuntimeError("PRIVATE_AI_ENABLED=true but GEMINI_API_KEY is missing")
 
-            self.private_ai = PrivateAI(
-                db,
-                self.ai_provider
-            )
+        if PRIVATE_AI_ENABLED:
+            self.private_ai = PrivateAI(db, self.ai_provider)
 
-            logger.info(
-                "Private AI subsystem initialized for main bot"
-            )
+        # The Arena has isolated tables and handlers; legacy quiz flows remain intact.
+        self.quiz_arena = QuizArena(db, self.ai_provider)
+        await self.quiz_arena.initialize()
+        await self.quiz_arena.schedule_recovery(self.application.job_queue)
+
+        if PRIVATE_AI_ENABLED:
+            logger.info("Private AI subsystem initialized for main bot")
         
         # Register handlers
         self._register_handlers()
@@ -644,6 +644,9 @@ Hello! To use this bot, you need to join our official groups/channels first.
         """Register all bot handlers"""
         # Command handlers
         self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("quiz", self.quiz_arena.command))
+        self.application.add_handler(CommandHandler("stop", self.quiz_arena.stop_command))
+        self.application.add_handler(CommandHandler("accept", self.quiz_arena.accept_command))
         self.application.add_handler(CommandHandler("refresh", self.refresh_command))
         self.application.add_handler(CommandHandler("createbuttonpost", self.create_button_post_command))
         self.application.add_handler(CommandHandler("mypost", self.my_posts_command))        
@@ -895,6 +898,9 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("removereply", "Remove custom reply"),
             BotCommand("forward", "Forward message to all (shows sender)"),
             BotCommand("credit", "Adjust AI credits"),
+            BotCommand("quiz", "Create an AI NEET quiz"),
+            BotCommand("stop", "Stop the active Arena quiz here"),
+            BotCommand("accept", "Accept a shared Arena quiz invitation"),
             BotCommand("aistats", "Private AI operations"),
             BotCommand("aiuser", "Inspect AI user stats"),
             BotCommand("aitop", "Top AI usage"),
@@ -3927,6 +3933,8 @@ Let's ace NEET together! 🚀
     
     async def handle_poll_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quiz answers"""
+        if self.quiz_arena and await self.quiz_arena.poll_answer(update, context):
+            return
         poll_answer = update.poll_answer
         user = poll_answer.user
         poll_id = poll_answer.poll_id
@@ -8892,11 +8900,13 @@ Let's connect with Aman Directly, privately and securely!
 
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
+        user = q.from_user
+        # Arena callbacks own their acknowledgement and are dispatched first.
+        if self.quiz_arena and await self.quiz_arena.callback(q, context):
+            return
         try:
             await q.answer()
         except: pass
-
-        user = q.from_user
 
         # Check force join for private chat callbacks (admins bypass)
         if q.message and q.message.chat.type == 'private':
@@ -8958,6 +8968,8 @@ Let's connect with Aman Directly, privately and securely!
             await self.show_post_preview_internal(update, context, pid)
 
     async def inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if self.quiz_arena and await self.quiz_arena.inline_query(update, context):
+            return
         q = update.inline_query.query
         if not q.startswith("post_"): return
         try:
