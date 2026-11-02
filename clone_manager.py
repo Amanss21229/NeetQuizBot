@@ -392,10 +392,25 @@ class CloneBotManager:
                 pass
         logger.info(f"Clone bot {clone_bot_id} fully stopped.")
 
-    async def start_all_clones(self, exclude_bot_id: int = None):
+    async def start_all_clones(
+        self,
+        exclude_bot_id: int = None,
+        exclude_bot_token: str = None
+    ):
         clones = await db.get_all_active_clone_bots()
 
         for clone in clones:
+            # Never launch the main bot token as a clone.
+            if (
+                exclude_bot_token
+                and clone["bot_token"] == exclude_bot_token
+            ):
+                logger.error(
+                    "SECURITY: Skipping clone record containing main bot token. "
+                    "Database bot_id: %s",
+                    clone.get("bot_id")
+                )
+                continue
             try:
                 clone_bot_id = int(clone["bot_id"])
              
