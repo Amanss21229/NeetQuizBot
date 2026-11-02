@@ -57,8 +57,79 @@ class QuizArena:
                     explanation TEXT NOT NULL DEFAULT '',
                     question_hash TEXT NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(chapter_key, question_hash)
+                    CONSTRAINT uq_arena_bank_chapter_language_hash
+                    UNIQUE(chapter_key, language, question_hash)
                 )
+            """)
+            # Migrate old uniqueness constraint.
+            await c.execute("""
+                ALTER TABLE arena_question_bank
+                DROP CONSTRAINT IF EXISTS
+                arena_question_bank_chapter_key_question_hash_key
+            """)
+
+            await c.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname =
+                        'uq_arena_bank_chapter_language_hash'
+                    ) THEN
+
+                        ALTER TABLE arena_question_bank
+                        ADD CONSTRAINT
+                        uq_arena_bank_chapter_language_hash
+                        UNIQUE (chapter_key, language, question_hash);
+
+                    END IF;
+                END
+                $$;
+            """)
+            await c.execute("""
+                CREATE OR REPLACE FUNCTION arena_question_bank_cap_guard()
+                RETURNS TRIGGER
+                LANGUAGE plpgsql
+                AS $$
+                DECLARE
+                    existing_count INTEGER;
+                BEGIN
+
+                    PERFORM pg_advisory_xact_lock(
+                        hashtextextended(
+                            NEW.chapter_key || ':' || NEW.language,
+                            0
+                        )
+                    );
+
+                    SELECT COUNT(*)
+                    INTO existing_count
+                    FROM arena_question_bank
+                    WHERE chapter_key = NEW.chapter_key
+                    AND language = NEW.language;
+
+                    IF existing_count >= 1000 THEN
+                        RETURN NULL;
+                    END IF;
+
+                    RETURN NEW;
+
+                END;
+                $$;
+            """)
+
+            await c.execute("""
+                DROP TRIGGER IF EXISTS
+                trg_arena_question_bank_cap
+                ON arena_question_bank
+            """)
+
+            await c.execute("""
+                CREATE TRIGGER trg_arena_question_bank_cap
+                BEFORE INSERT ON arena_question_bank
+                FOR EACH ROW
+                EXECUTE FUNCTION arena_question_bank_cap_guard()
             """)
             await c.execute("CREATE INDEX IF NOT EXISTS idx_arena_bank_chapter ON arena_question_bank(chapter_key, language)")
             await c.execute("""
@@ -225,7 +296,7 @@ class QuizArena:
                     f"📨 *INVITATION & START*\n\n📖 {cfg['chapter']}\n🌐 {cfg['language'].title()}\n❓ {cfg['count']} questions\n⏱ {cfg['seconds']} sec/question\n💳 Cost: {cost} credit(s)\n\nInvite people or groups using the first button. Then press Done.\n\nNote: the bot must be present in a group to publish its quiz.",
                     reply_markup=kb, parse_mode="Markdown")
             else:
-                await q.answer("Selection saved. Choose the remaining settings.")
+                pass
             return True
         if action == "start":
             cfg = self.configs.get(user_id)
@@ -241,14 +312,23 @@ class QuizArena:
                     if q.message:
                         await q.message.delete()
                     elif q.inline_message_id:
-                        await context.bot.edit_message_text(chat_id=None, message_id=None, inline_message_id=q.inline_message_id, text="❌ Invitation rejected")
+                        await context.bot.edit_message_text(
+                            inline_message_id=q.inline_message_id,
+                            text="❌ Invitation rejected."
+                        )
                 except Exception:
                     pass
                 await q.answer("Invitation rejected")
                 return True
             chat = q.message.chat if q.message else None
+            
             if not chat:
-                await q.answer(f"To accept in this chat, send: /accept {session_id}", show_alert=True)
+                await q.answer(
+                    f"To accept, send /accept {session_id} "
+                    "in the chat where this invitation was posted. "
+                    "In groups, only an admin can accept.",
+                    show_alert=True
+                )
                 return True
             if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
                 try:
@@ -326,7 +406,12 @@ class QuizArena:
             raise RuntimeError("Gemini API is not configured. Set GEMINI_API_KEY.")
         lang = "Hindi" if language == "hindi" else "English"
         prompt = f'''Create exactly {count} distinct NEET-UG multiple-choice questions for the NCERT chapter: {chapter}. Language: {lang}. Use only current NEET-UG syllabus scope and current NCERT concepts. Each question must have exactly four options and exactly one correct answer. Do not invent facts, ambiguous claims, or out-of-syllabus material. Avoid repeats and near-duplicates. For every item, independently solve/check the answer and provide a concise explanation. Return ONLY valid JSON array with objects: question, options (array of exactly 4 strings), correct_index (0-3), explanation. Append the literal text "【@DrQuizRobot】" at the end of every question. No markdown fences.'''
-        raw = await self.provider.generate([ChatMessage(role="user", content=prompt)], "You are a careful NEET-UG question writer. Accuracy is more important than speed. If uncertain about a fact, do not include it.")
+        raw = await self.provider.generate(
+            [ChatMessage(role="user", content=prompt)],
+            "You are a careful NEET-UG question writer. Accuracy is more important than speed. If uncertain about a fact, do not include it.",
+            max_output_tokens=8192,
+            timeout_seconds=120,
+        )
         raw = raw.strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
         data = json.loads(raw)
@@ -349,7 +434,12 @@ class QuizArena:
             out.append({"question":q,"options":[str(x).strip() for x in opts],"correct_index":idx,"explanation":explanation})
         # A second independent model pass catches inconsistencies, but cannot mathematically guarantee factual perfection.
         review_prompt = "Audit every question below for factual correctness, NCERT alignment, latest NEET-UG scope, exactly one correct option, and explanation consistency. Return JSON only: {\"valid\":true/false,\"issues\":[...]} . If any uncertainty or error exists, valid must be false.\n" + json.dumps(out, ensure_ascii=False)
-        review = await self.provider.generate([ChatMessage(role="user", content=review_prompt)], "You are an independent strict NEET question auditor. Reject uncertain or incorrect questions.")
+        review = await self.provider.generate(
+            [ChatMessage(role="user", content=review_prompt)],
+            "You are an independent strict NEET question auditor. Reject uncertain or incorrect questions.",
+            max_output_tokens=1200,
+            timeout_seconds=120,
+        )
         review = re.sub(r"^```(?:json)?\s*|\s*```$", "", review.strip(), flags=re.I)
         verdict = json.loads(review)
         if verdict.get("valid") is not True or verdict.get("issues"):
@@ -361,14 +451,86 @@ class QuizArena:
         return {"question":r["question"],"options":r["options"],"correct_index":int(r["correct_index"]),"explanation":r["explanation"]}
 
     async def _save_bank(self, chapter, language, questions):
+
         key = self.chapter_key(chapter)
+
         async with self.db.pool.acquire() as c:
-            current = await c.fetchval("SELECT COUNT(*) FROM arena_question_bank WHERE chapter_key=$1 AND language=$2", key, language)
-            for item in questions:
-                if current >= 1000: break
-                h = hashlib.sha256(re.sub(r"\W+", "", item["question"].lower()).encode()).hexdigest()
-                result = await c.execute("INSERT INTO arena_question_bank(chapter_key,chapter,language,question,options,correct_index,explanation,question_hash) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8) ON CONFLICT(chapter_key,question_hash) DO NOTHING", key, chapter, language, item["question"], json.dumps(item["options"],ensure_ascii=False), item["correct_index"], item["explanation"], h)
-                if result.endswith("1"): current += 1
+
+            async with c.transaction():
+
+                # Lock this chapter-language bank.
+                await c.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended($1, 0)
+                    )
+                    """,
+                    f"{key}:{language}"
+                )
+
+                current = await c.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM arena_question_bank
+                    WHERE chapter_key=$1
+                    AND language=$2
+                    """,
+                    key,
+                    language
+                )
+
+                for item in questions:
+
+                    if current >= 1000:
+                        break
+
+                    normalized = re.sub(
+                        r"\W+",
+                        "",
+                        item["question"].lower()
+                    )
+
+                    h = hashlib.sha256(
+                        normalized.encode("utf-8")
+                    ).hexdigest()
+
+                    result = await c.execute(
+                        """
+                        INSERT INTO arena_question_bank(
+                            chapter_key,
+                            chapter,
+                            language,
+                            question,
+                            options,
+                            correct_index,
+                            explanation,
+                            question_hash
+                        )
+                        VALUES(
+                            $1,$2,$3,$4,$5::jsonb,$6,$7,$8
+                        )
+                        ON CONFLICT(
+                            chapter_key,
+                            language,
+                            question_hash
+                        )
+                        DO NOTHING
+                        """,
+                        key,
+                        chapter,
+                        language,
+                        item["question"],
+                        json.dumps(
+                            item["options"],
+                            ensure_ascii=False
+                        ),
+                        item["correct_index"],
+                        item["explanation"],
+                        h
+                    )
+
+                    if result.endswith("1"):
+                        current += 1
 
     async def inline_query(self, update, context):
         query = update.inline_query.query.strip()
@@ -380,8 +542,34 @@ class QuizArena:
         if not row or row["status"] not in ("draft", "generating", "ready"):
             await update.inline_query.answer([], cache_time=0, is_personal=True)
             return True
-        text = (f"📨 NEET Quiz Invitation\n\n📖 Chapter: {row['chapter']}\n🌐 Language: {row['language'].title()}\n❓ Questions: {row['question_count']}\n⏱ Time/question: {row['seconds']} sec\n\nAccept to join the synchronized quiz. If Telegram does not complete acceptance from the button, a group admin/user can send /accept {row['session_id']} in this chat.")
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Accept invitation", callback_data=f"arena:accept:{row['session_id']}"), InlineKeyboardButton("❌ Reject", callback_data=f"arena:reject:{row['session_id']}")]])
+        text = (
+            f"📨 NEET QUIZ INVITATION\n\n"
+            f"📖 Chapter: {row['chapter']}\n"
+            f"🌐 Language: {row['language'].title()}\n"
+            f"❓ Questions: {row['question_count']}\n"
+            f"⏱ Time per question: {row['seconds']} sec\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"To accept this invitation:\n\n"
+            f"👥 Group: A group admin must send:\n"
+            f"/accept {row['session_id']}\n\n"
+            f"👤 Private: The recipient must start the bot "
+            f"and send the same command in this private chat.\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"One user can participate in only one destination "
+            f"for this quiz."
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "✅ Accept (Instructions)",
+                    callback_data=f"arena:accept:{row['session_id']}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=f"arena:reject:{row['session_id']}"
+                )
+            ]
+        ])
         result = InlineQueryResultArticle(id="arena_"+token, title="📨 Invite to NEET Quiz", description=f"{row['chapter']} · {row['question_count']} questions", input_message_content=InputTextMessageContent(text), reply_markup=markup)
         await update.inline_query.answer([result], cache_time=0, is_personal=True)
         return True
