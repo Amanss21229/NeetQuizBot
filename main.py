@@ -9346,7 +9346,7 @@ Let's connect with Aman Directly, privately and securely!
 
             # Start all active clone bots
             await clone_manager.start_all_clones(
-                exclude_bot_id=MAIN_BOT_ID
+                exclude_bot_id=MAIN_BOT_ID,
                 exclude_bot_token=BOT_TOKEN
             )
 
