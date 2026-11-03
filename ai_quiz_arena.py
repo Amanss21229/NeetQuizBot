@@ -42,6 +42,8 @@ class QuizArena:
         self.configs: dict[int, dict[str, Any]] = {}
         self.polls: dict[str, dict[str, Any]] = {}
         self.session_locks: dict[str, asyncio.Lock] = {}
+        self.preparation_tasks: dict[str, asyncio.Task] = {}
+        self.preparation_errors: dict[str, str] = {}
 
     async def initialize(self):
         async with self.db.pool.acquire() as c:
@@ -295,14 +297,27 @@ class QuizArena:
                 await context.bot.send_message(cfg["chat_id"],
                     f"📨 *INVITATION & START*\n\n📖 {cfg['chapter']}\n🌐 {cfg['language'].title()}\n❓ {cfg['count']} questions\n⏱ {cfg['seconds']} sec/question\n💳 Cost: {cost} credit(s)\n\nInvite people or groups using the first button. Then press Done.\n\nNote: the bot must be present in a group to publish its quiz.",
                     reply_markup=kb, parse_mode="Markdown")
+                # Generate the question set while the creator is sharing the invitation.
+                # The Done button can then start from the prepared set instead of waiting
+                # for Gemini generation and the independent audit.
+                task = asyncio.create_task(self._prepare_questions(draft_id, cfg.copy(), context))
+                self.preparation_tasks[draft_id] = task
             else:
                 pass
             return True
         if action == "start":
             cfg = self.configs.get(user_id)
             if not cfg:
-                await q.answer("Configuration expired.", show_alert=True); return True
-            await q.answer("Preparing quiz…")
+                await q.answer("Configuration expired. Run /quiz again.", show_alert=True)
+                return True
+            task = self.preparation_tasks.get(cfg.get("session_id"))
+            if task and not task.done():
+                await q.answer(
+                    "Questions are still being prepared. Wait for the confirmation message, then press Done.",
+                    show_alert=True
+                )
+                return True
+            await q.answer("Starting quiz…")
             await self.start_session(user_id, cfg, context, q.message)
             return True
         if action in ("accept", "reject"):
@@ -355,51 +370,193 @@ class QuizArena:
             return True
         return True
 
+    async def _prepare_questions(self, session_id: str, cfg: dict, context=None):
+        """Prepare and persist questions before the creator presses Done."""
+        try:
+            async with self.db.pool.acquire() as c:
+                row = await c.fetchrow(
+                    "SELECT status, questions FROM arena_sessions WHERE id=$1",
+                    session_id,
+                )
+            if not row or row["status"] != "draft":
+                return
+            existing = row["questions"] or []
+            if isinstance(existing, str):
+                existing = json.loads(existing)
+            if len(existing) == int(cfg["count"]):
+                return
+
+            async with self.db.pool.acquire() as c:
+                rows = await c.fetch(
+                    """SELECT question,options,correct_index,explanation
+                       FROM arena_question_bank
+                       WHERE chapter_key=$1 AND language=$2
+                       ORDER BY random() LIMIT $3""",
+                    self.chapter_key(cfg["chapter"]),
+                    cfg["language"],
+                    cfg["count"],
+                )
+            questions = [self._row_question(r) for r in rows]
+
+            missing = int(cfg["count"]) - len(questions)
+            if missing > 0:
+                generated = await self._generate(
+                    cfg["chapter"], cfg["language"], missing
+                )
+                questions.extend(generated)
+                await self._save_bank(cfg["chapter"], cfg["language"], generated)
+
+            if len(questions) != int(cfg["count"]):
+                raise RuntimeError("Question generator returned an incomplete set")
+
+            async with self.db.pool.acquire() as c:
+                await c.execute(
+                    """UPDATE arena_sessions SET questions=$2::jsonb
+                       WHERE id=$1 AND status='draft'""",
+                    session_id,
+                    json.dumps(questions, ensure_ascii=False),
+                )
+            if context:
+                try:
+                    await context.bot.send_message(
+                        chat_id=cfg["chat_id"],
+                        text=(
+                            f"✅ {len(questions)} quiz questions are ready! "
+                            "You can now press Done — Start quiz. "
+                            "The first question will be sent within 5 seconds."
+                        ),
+                    )
+                except Exception:
+                    # Notification delivery must not invalidate a successfully
+                    # prepared question set.
+                    log.exception("Arena questions prepared but ready notice failed")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.preparation_errors[session_id] = str(e)
+            log.exception("Arena question preparation failed for %s: %s", session_id, e)
+            if context:
+                try:
+                    await context.bot.send_message(
+                        chat_id=cfg["chat_id"],
+                        text="❌ Quiz questions could not be prepared. Please run /quiz again. No credits were deducted."
+                    )
+                except Exception:
+                    log.exception("Could not send Arena preparation failure notice")
+        finally:
+            self.preparation_tasks.pop(session_id, None)
+
+    async def _bank_count(self, chapter: str, language: str) -> int:
+        async with self.db.pool.acquire() as c:
+            return int(await c.fetchval(
+                """SELECT COUNT(*) FROM arena_question_bank
+                   WHERE chapter_key=$1 AND language=$2""",
+                self.chapter_key(chapter), language
+            ) or 0)
+
     async def start_session(self, user_id: int, cfg: dict, context, status_message):
         session_id = cfg["session_id"]
-        cost = int(cfg["cost"])
-        try:
-            async with self.db.pool.acquire() as c:
-                # The partial unique index prevents parallel sessions globally.
-                await c.execute("UPDATE arena_sessions SET status='generating' WHERE id=$1 AND creator_id=$2 AND status='draft'", session_id, user_id)
-        except Exception as e:
-            if "uq_arena_single_active" in str(e) or "duplicate key" in str(e).lower():
-                await status_message.reply_text("⏳ Another AI Quiz Arena session is already running or being prepared. Please wait until it finishes.")
-                return
-            raise
-        try:
-            # Reuse cached bank first. Cache contains a maximum of 1,000 unique questions per chapter.
-            async with self.db.pool.acquire() as c:
-                bank_count = await c.fetchval("SELECT COUNT(*) FROM arena_question_bank WHERE chapter_key=$1 AND language=$2", self.chapter_key(cfg["chapter"]), cfg["language"])
-                if bank_count >= 1000:
-                    rows = await c.fetch("SELECT question,options,correct_index,explanation FROM arena_question_bank WHERE chapter_key=$1 AND language=$2 ORDER BY random() LIMIT $3", self.chapter_key(cfg["chapter"]), cfg["language"], cfg["count"])
-                    questions = [self._row_question(r) for r in rows]
-                else:
-                    questions = []
-            if len(questions) < cfg["count"]:
-                generated = await self._generate(cfg["chapter"], cfg["language"], cfg["count"])
-                questions = generated
-                await self._save_bank(cfg["chapter"], cfg["language"], generated)
-            if len(questions) != cfg["count"]:
-                raise RuntimeError("Question generator returned an incomplete set")
-            # Atomic credit debit after generation succeeds; failed generations cost nothing.
-            debit = await self.db.consume_ai_credit(user_id, cost, "ARENA_QUIZ_CREATE", {"source":"ai_quiz_arena","session_id":session_id,"questions":cfg["count"]})
-            if not debit:
-                raise RuntimeError("INSUFFICIENT_CREDITS")
-            async with self.db.pool.acquire() as c:
-                await c.execute("UPDATE arena_sessions SET questions=$2::jsonb,status='ready' WHERE id=$1", session_id, json.dumps(questions, ensure_ascii=False))
-                await c.execute("INSERT INTO arena_destinations(session_id,chat_id,chat_type,title) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING", session_id, cfg["chat_id"], cfg["chat_type"], cfg["title"])
-                await c.execute("UPDATE arena_invites SET session_id=$2 WHERE token=$1", cfg["invite_token"], session_id)
-            cfg["session_id"] = session_id
-            await status_message.reply_text(f"✅ Quiz ready. {cfg['count']} unique questions loaded. Credits used: {cost}. Starting in 5 seconds.")
-            context.job_queue.run_once(self._tick, when=5, data={"session_id":session_id}, name=f"arena:{session_id}")
-            self.configs.pop(user_id, None)
-        except Exception as e:
-            async with self.db.pool.acquire() as c:
-                await c.execute("UPDATE arena_sessions SET status='failed',ended_at=NOW() WHERE id=$1", session_id)
-            log.exception("Arena session setup failed: %s", e)
-            message = "❌ Quiz setup failed. No credits were deducted." if str(e) != "INSUFFICIENT_CREDITS" else "❌ Credits changed before quiz start; please check /credits."
-            await status_message.reply_text(message)
+        # Share the same per-session lock with /stop and the scheduler so
+        # start/cancel/question-delivery transitions cannot race each other.
+        lock = self.session_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            try:
+                async with self.db.pool.acquire() as c:
+                    row = await c.fetchrow(
+                        "SELECT status, questions FROM arena_sessions WHERE id=$1 AND creator_id=$2",
+                        session_id, user_id
+                    )
+                if not row:
+                    await status_message.reply_text("❌ This quiz setup has expired. Run /quiz again.")
+                    return
+                if row["status"] != "draft":
+                    await status_message.reply_text(
+                        "⏳ This quiz has already been started or cancelled. Run /quiz to create a new one."
+                    )
+                    return
+
+                # Normally this task has been running since the invitation screen appeared.
+                task = self.preparation_tasks.get(session_id)
+                if task and not task.done():
+                    await status_message.reply_text(
+                        "⚙️ Questions are still being prepared. Wait for the confirmation message, then press Done."
+                    )
+                    return
+
+                if session_id in self.preparation_errors:
+                    error = self.preparation_errors.pop(session_id)
+                    raise RuntimeError("Question preparation failed: " + error)
+
+                async with self.db.pool.acquire() as c:
+                    row = await c.fetchrow(
+                        "SELECT questions,status FROM arena_sessions WHERE id=$1",
+                        session_id
+                    )
+                questions = row["questions"] if row else None
+                if isinstance(questions, str):
+                    questions = json.loads(questions)
+                if not row or row["status"] != "draft" or not questions or len(questions) != int(cfg["count"]):
+                    raise RuntimeError("Prepared question set is missing or incomplete")
+
+                # Recheck credits immediately before committing the session.
+                balance_row = await self.db.get_ai_credits(user_id)
+                balance = int(balance_row["balance"]) if balance_row else 0
+                if balance < int(cfg["cost"]):
+                    raise RuntimeError("INSUFFICIENT_CREDITS")
+
+                # Atomically claim the single Arena slot. The partial unique index
+                # prevents two users from starting overlapping quizzes.
+                async with self.db.pool.acquire() as c:
+                    await c.execute(
+                        """UPDATE arena_sessions SET status='ready'
+                           WHERE id=$1 AND creator_id=$2 AND status='draft'""",
+                        session_id, user_id
+                    )
+
+                debit = await self.db.consume_ai_credit(
+                    user_id, int(cfg["cost"]), "ARENA_QUIZ_CREATE",
+                    {"source": "ai_quiz_arena", "session_id": session_id,
+                     "questions": cfg["count"]}
+                )
+                if not debit:
+                    async with self.db.pool.acquire() as c:
+                        await c.execute(
+                            "UPDATE arena_sessions SET status='failed',ended_at=NOW() WHERE id=$1 AND status='ready'",
+                            session_id
+                        )
+                    raise RuntimeError("INSUFFICIENT_CREDITS")
+
+                async with self.db.pool.acquire() as c:
+                    await c.execute(
+                        """INSERT INTO arena_destinations(session_id,chat_id,chat_type,title)
+                           VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING""",
+                        session_id, cfg["chat_id"], cfg["chat_type"], cfg["title"]
+                    )
+
+                await status_message.reply_text(
+                    f"✅ Quiz ready! {cfg['count']} questions prepared. "
+                    f"Credits used: {cfg['cost']}. Starting in 3 seconds."
+                )
+                context.job_queue.run_once(
+                    self._tick, when=3, data={"session_id": session_id},
+                    name=f"arena:{session_id}"
+                )
+                self.configs.pop(user_id, None)
+            except Exception as e:
+                async with self.db.pool.acquire() as c:
+                    await c.execute(
+                        """UPDATE arena_sessions SET status='failed',ended_at=NOW()
+                           WHERE id=$1 AND status IN ('draft','generating')""",
+                        session_id
+                    )
+                log.exception("Arena session start failed: %s", e)
+                self.configs.pop(user_id, None)
+                message = (
+                    "❌ Credits changed before quiz start; please check /credits."
+                    if str(e) == "INSUFFICIENT_CREDITS"
+                    else "❌ Quiz setup failed. No credits were deducted. Please run /quiz again."
+                )
+                await status_message.reply_text(message)
 
     async def _generate(self, chapter: str, language: str, count: int) -> list[dict]:
         if not self.provider:
@@ -590,17 +747,52 @@ class QuizArena:
                     return
                 await c.execute("UPDATE arena_sessions SET status='active',current_index=$2,started_at=COALESCE(started_at,NOW()),question_started_at=NOW() WHERE id=$1", sid, next_index)
             qdata = questions[next_index]
-            for dest in destinations:
-                try:
-                    poll = await context.bot.send_poll(chat_id=dest["chat_id"], question=qdata["question"], options=qdata["options"], type="quiz", correct_option_id=int(qdata["correct_index"]), is_anonymous=False, open_period=int(session["seconds"]), explanation=qdata["explanation"][:180])
-                    self.polls[poll.poll.id] = {"session_id":sid,"chat_id":dest["chat_id"],"question_index":next_index,"correct_index":int(qdata["correct_index"])}
-                    async with self.db.pool.acquire() as c:
-                        await c.execute("INSERT INTO arena_poll_map(poll_id,session_id,chat_id,question_index,correct_index) VALUES($1,$2,$3,$4,$5) ON CONFLICT(poll_id) DO NOTHING", poll.poll.id, sid, dest["chat_id"], next_index, int(qdata["correct_index"]))
-                except (Forbidden, BadRequest) as e:
-                    log.warning("Arena poll delivery failed chat=%s: %s", dest["chat_id"], e)
-                    async with self.db.pool.acquire() as c:
-                        await c.execute("UPDATE arena_destinations SET status='failed' WHERE session_id=$1 AND chat_id=$2", sid, dest["chat_id"])
-            context.job_queue.run_once(self._tick, when=int(session["seconds"]), data={"session_id":sid}, name=f"arena:{sid}")
+            semaphore = asyncio.Semaphore(10)
+
+            async def deliver_poll(dest):
+                async with semaphore:
+                    try:
+                        poll = await context.bot.send_poll(
+                            chat_id=dest["chat_id"],
+                            question=qdata["question"],
+                            options=qdata["options"],
+                            type="quiz",
+                            correct_option_id=int(qdata["correct_index"]),
+                            is_anonymous=False,
+                            open_period=int(session["seconds"]),
+                            explanation=qdata["explanation"][:180],
+                        )
+                        self.polls[poll.poll.id] = {
+                            "session_id": sid,
+                            "chat_id": dest["chat_id"],
+                            "question_index": next_index,
+                            "correct_index": int(qdata["correct_index"]),
+                        }
+                        async with self.db.pool.acquire() as c:
+                            await c.execute(
+                                """INSERT INTO arena_poll_map
+                                   (poll_id,session_id,chat_id,question_index,correct_index)
+                                   VALUES($1,$2,$3,$4,$5) ON CONFLICT(poll_id) DO NOTHING""",
+                                poll.poll.id, sid, dest["chat_id"], next_index,
+                                int(qdata["correct_index"])
+                            )
+                    except Exception as e:
+                        log.warning(
+                            "Arena poll delivery failed chat=%s: %s",
+                            dest["chat_id"], e
+                        )
+                        async with self.db.pool.acquire() as c:
+                            await c.execute(
+                                """UPDATE arena_destinations SET status='failed'
+                                   WHERE session_id=$1 AND chat_id=$2""",
+                                sid, dest["chat_id"]
+                            )
+
+            await asyncio.gather(*(deliver_poll(dest) for dest in destinations))
+            context.job_queue.run_once(
+                self._tick, when=int(session["seconds"]),
+                data={"session_id": sid}, name=f"arena:{sid}"
+            )
 
     async def poll_answer(self, update, context) -> bool:
         pa = update.poll_answer
@@ -663,15 +855,81 @@ class QuizArena:
         await self.stop_for_chat(chat.id, user.id, context, message=update.effective_message)
 
     async def stop_for_chat(self, chat_id, user_id, context, message=None):
+        """Cancel the complete synchronized Arena session, not just one destination."""
+        cfg = self.configs.pop(user_id, None)
+        cancelled_ids = []
+
         async with self.db.pool.acquire() as c:
-            row = await c.fetchrow("SELECT s.id FROM arena_sessions s JOIN arena_destinations d ON d.session_id=s.id WHERE d.chat_id=$1 AND d.status='joined' AND s.status='active'", chat_id)
-            if not row:
-                if message: await message.reply_text("No active Arena quiz in this chat.")
-                return
-            await c.execute("UPDATE arena_destinations SET status='stopped' WHERE session_id=$1 AND chat_id=$2", row["id"], chat_id)
-            left = await c.fetchval("SELECT COUNT(*) FROM arena_destinations WHERE session_id=$1 AND status='joined'", row["id"])
-            if not left: await c.execute("UPDATE arena_sessions SET status='finished',ended_at=NOW() WHERE id=$1", row["id"])
-        if message: await message.reply_text("🛑 Quiz stopped for this chat. This chat will not receive the final leaderboard.")
+            # In a private chat, the creator can stop their own session. In a
+            # group, stop_command has already verified the caller is an admin.
+            row = await c.fetchrow(
+                """
+                SELECT s.id, s.creator_id
+                FROM arena_sessions s
+                WHERE s.status IN ('draft','generating','ready','active')
+                  AND (
+                    s.creator_id=$1
+                    OR (
+                        $2 < 0
+                        AND EXISTS (
+                            SELECT 1 FROM arena_destinations d
+                            WHERE d.session_id=s.id AND d.chat_id=$2
+                        )
+                    )
+                  )
+                ORDER BY s.created_at DESC
+                LIMIT 1
+                """,
+                user_id, chat_id
+            )
+
+            if not row and cfg and cfg.get("session_id"):
+                row = await c.fetchrow(
+                    "SELECT id,creator_id FROM arena_sessions WHERE id=$1 AND creator_id=$2",
+                    cfg["session_id"], user_id
+                )
+
+        if row:
+            sid = row["id"]
+            # Serialize cancellation against question delivery/finalization.
+            lock = self.session_locks.setdefault(sid, asyncio.Lock())
+            async with lock:
+                async with self.db.pool.acquire() as c:
+                    result = await c.execute(
+                        """UPDATE arena_sessions
+                           SET status='cancelled', ended_at=NOW()
+                           WHERE id=$1 AND status IN ('draft','generating','ready','active')""",
+                        sid
+                    )
+                    if result.endswith("1"):
+                        await c.execute(
+                            """UPDATE arena_destinations SET status='stopped'
+                               WHERE session_id=$1 AND status='joined'""",
+                            sid
+                        )
+                        cancelled_ids.append(sid)
+
+        # Stop background generation and scheduled question jobs.
+        for sid in cancelled_ids:
+            task = self.preparation_tasks.pop(sid, None)
+            if task and not task.done():
+                task.cancel()
+            self.preparation_errors.pop(sid, None)
+            for job in context.job_queue.jobs():
+                data = getattr(job, "data", None) or {}
+                if data.get("session_id") == sid:
+                    job.schedule_removal()
+
+        if message:
+            if cancelled_ids:
+                await message.reply_text(
+                    "🛑 AI Quiz Arena stopped completely. All invited groups and chats "
+                    "have been removed from this quiz. You can start a new quiz with /quiz."
+                )
+            else:
+                await message.reply_text(
+                    "ℹ️ No running or prepared Arena quiz was found. You can start one with /quiz."
+                )
 
     async def _leaderboard(self, context, sid):
         async with self.db.pool.acquire() as c:
@@ -698,9 +956,24 @@ class QuizArena:
             places = ", ".join(dict.fromkeys(u["places"]))
             lines.append(f"<blockquote><b>#{rank} · <a href=\"tg://user?id={uid}\">{self._escape(u['name'])}</a></b>\n⭐ Score: <b>{u['score']}</b>  |  ✅ {u['correct']}  |  ❌ {u['wrong']}  |  ⏭ {u['unanswered']}\n📍 {self._escape(places)}</blockquote>")
         text = "\n".join(lines) if ranked else f"🏆 <b>{self._escape(session['chapter'])}</b>\nNo participants recorded."
-        for d in destinations:
-            try: await context.bot.send_message(d["chat_id"], text, parse_mode="HTML", disable_web_page_preview=True)
-            except Exception as e: log.warning("Arena leaderboard delivery failed: %s", e)
+        semaphore = asyncio.Semaphore(10)
+
+        async def deliver(destination):
+            async with semaphore:
+                try:
+                    await context.bot.send_message(
+                        destination["chat_id"], text, parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                except Exception as e:
+                    log.warning(
+                        "Arena leaderboard delivery failed chat=%s: %s",
+                        destination["chat_id"], e
+                    )
+
+        # Parallel delivery avoids making later groups wait for every earlier
+        # destination's Telegram API response.
+        await asyncio.gather(*(deliver(d) for d in destinations))
 
     @staticmethod
     def _escape(value):
