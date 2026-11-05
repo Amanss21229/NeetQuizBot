@@ -455,108 +455,293 @@ class QuizArena:
             ) or 0)
 
     async def start_session(self, user_id: int, cfg: dict, context, status_message):
+        """Atomically claim the Arena slot and consume credits.
+
+        The session status change, credit debit, ledger entry, and creator
+        destination are committed in one PostgreSQL transaction. This avoids
+        leaving a stuck ``ready`` session or consuming credits if setup fails.
+        """
         session_id = cfg["session_id"]
-        # Share the same per-session lock with /stop and the scheduler so
-        # start/cancel/question-delivery transitions cannot race each other.
         lock = self.session_locks.setdefault(session_id, asyncio.Lock())
+
         async with lock:
+            credits_committed = False
+            job_scheduled = False
+            refund_succeeded = False
+
             try:
                 async with self.db.pool.acquire() as c:
                     row = await c.fetchrow(
-                        "SELECT status, questions FROM arena_sessions WHERE id=$1 AND creator_id=$2",
-                        session_id, user_id
+                        """
+                        SELECT status, questions
+                        FROM arena_sessions
+                        WHERE id=$1 AND creator_id=$2
+                        """,
+                        session_id,
+                        user_id,
                     )
+
                 if not row:
-                    await status_message.reply_text("❌ This quiz setup has expired. Run /quiz again.")
-                    return
-                if row["status"] != "draft":
                     await status_message.reply_text(
-                        "⏳ This quiz has already been started or cancelled. Run /quiz to create a new one."
+                        "❌ This quiz setup has expired. Run /quiz again."
                     )
                     return
 
-                # Normally this task has been running since the invitation screen appeared.
+                if row["status"] != "draft":
+                    await status_message.reply_text(
+                        "⏳ This quiz setup is no longer available. "
+                        "Run /quiz to create a new one."
+                    )
+                    return
+
                 task = self.preparation_tasks.get(session_id)
                 if task and not task.done():
                     await status_message.reply_text(
-                        "⚙️ Questions are still being prepared. Wait for the confirmation message, then press Done."
+                        "⚙️ Questions are still being prepared. "
+                        "Wait for the confirmation message, then press Done."
                     )
                     return
 
                 if session_id in self.preparation_errors:
-                    error = self.preparation_errors.pop(session_id)
-                    raise RuntimeError("Question preparation failed: " + error)
+                    self.preparation_errors.pop(session_id, None)
+                    raise RuntimeError("QUESTION_PREPARATION_FAILED")
 
-                async with self.db.pool.acquire() as c:
-                    row = await c.fetchrow(
-                        "SELECT questions,status FROM arena_sessions WHERE id=$1",
-                        session_id
-                    )
-                questions = row["questions"] if row else None
+                questions = row["questions"] or []
                 if isinstance(questions, str):
                     questions = json.loads(questions)
-                if not row or row["status"] != "draft" or not questions or len(questions) != int(cfg["count"]):
-                    raise RuntimeError("Prepared question set is missing or incomplete")
 
-                # Recheck credits immediately before committing the session.
-                balance_row = await self.db.get_ai_credits(user_id)
-                balance = int(balance_row["balance"]) if balance_row else 0
-                if balance < int(cfg["cost"]):
-                    raise RuntimeError("INSUFFICIENT_CREDITS")
+                if len(questions) != int(cfg["count"]):
+                    raise RuntimeError("PREPARED_QUESTION_SET_INCOMPLETE")
 
-                # Atomically claim the single Arena slot. The partial unique index
-                # prevents two users from starting overlapping quizzes.
+                cost = int(cfg["cost"])
+                metadata = {
+                    "source": "ai_quiz_arena",
+                    "session_id": session_id,
+                    "questions": int(cfg["count"]),
+                }
+
+                # All database-side setup is atomic. If another Arena session
+                # owns the global partial-unique-index slot, or any subsequent
+                # statement fails, PostgreSQL rolls the entire transaction back.
                 async with self.db.pool.acquire() as c:
-                    await c.execute(
-                        """UPDATE arena_sessions SET status='ready'
-                           WHERE id=$1 AND creator_id=$2 AND status='draft'""",
-                        session_id, user_id
+                    async with c.transaction():
+                        other = await c.fetchrow(
+                            """
+                            SELECT id, creator_id, chapter, status
+                            FROM arena_sessions
+                            WHERE id <> $1
+                              AND status IN ('generating','ready','active')
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                            """,
+                            session_id,
+                        )
+                        if other:
+                            raise RuntimeError("ARENA_BUSY")
+
+                        claimed = await c.fetchval(
+                            """
+                            UPDATE arena_sessions
+                            SET status='ready'
+                            WHERE id=$1 AND creator_id=$2 AND status='draft'
+                            RETURNING id
+                            """,
+                            session_id,
+                            user_id,
+                        )
+                        if not claimed:
+                            raise RuntimeError("SESSION_NOT_DRAFT")
+
+                        credit_row = await c.fetchrow(
+                            """
+                            UPDATE ai_credits
+                            SET balance = balance - $2,
+                                total_used = total_used + $2,
+                                updated_at = NOW()
+                            WHERE user_id = $1 AND balance >= $2
+                            RETURNING balance
+                            """,
+                            user_id,
+                            cost,
+                        )
+                        if not credit_row:
+                            raise RuntimeError("INSUFFICIENT_CREDITS")
+
+                        await c.execute(
+                            """
+                            INSERT INTO ai_credit_transactions(
+                                user_id, amount, transaction_type,
+                                balance_after, metadata
+                            )
+                            VALUES($1,$2,$3,$4,$5::jsonb)
+                            """,
+                            user_id,
+                            -cost,
+                            "ARENA_QUIZ_CREATE",
+                            credit_row["balance"],
+                            json.dumps(metadata),
+                        )
+
+                        await c.execute(
+                            """
+                            INSERT INTO arena_destinations(
+                                session_id, chat_id, chat_type, title
+                            )
+                            VALUES($1,$2,$3,$4)
+                            ON CONFLICT(session_id, chat_id) DO UPDATE
+                            SET status='joined'
+                            """,
+                            session_id,
+                            cfg["chat_id"],
+                            cfg["chat_type"],
+                            cfg["title"],
+                        )
+
+                credits_committed = True
+
+                if not context.job_queue:
+                    raise RuntimeError("JOB_QUEUE_UNAVAILABLE")
+
+                context.job_queue.run_once(
+                    self._tick,
+                    when=3,
+                    data={"session_id": session_id},
+                    name=f"arena:{session_id}",
+                )
+                job_scheduled = True
+
+                self.configs.pop(user_id, None)
+                try:
+                    await status_message.reply_text(
+                        f"✅ Quiz ready! {cfg['count']} questions prepared. "
+                        f"Credits used: {cost}. Starting in 3 seconds."
+                    )
+                except Exception:
+                    # The scheduled quiz must continue even if the status
+                    # notification cannot be delivered.
+                    log.exception(
+                        "Arena %s started but status message delivery failed",
+                        session_id,
                     )
 
-                debit = await self.db.consume_ai_credit(
-                    user_id, int(cfg["cost"]), "ARENA_QUIZ_CREATE",
-                    {"source": "ai_quiz_arena", "session_id": session_id,
-                     "questions": cfg["count"]}
+            except Exception as e:
+                log.exception(
+                    "Arena session start failed (session_id=%s, user_id=%s): %s",
+                    session_id,
+                    user_id,
+                    e,
                 )
-                if not debit:
+
+                # If the DB transaction committed but scheduling failed,
+                # refund the debit and record the refund in the same transaction.
+                if credits_committed and not job_scheduled:
+                    try:
+                        async with self.db.pool.acquire() as c:
+                            async with c.transaction():
+                                refund_row = await c.fetchrow(
+                                    """
+                                    UPDATE ai_credits
+                                    SET balance = balance + $2,
+                                        total_used = GREATEST(total_used - $2, 0),
+                                        updated_at = NOW()
+                                    WHERE user_id=$1
+                                    RETURNING balance
+                                    """,
+                                    user_id,
+                                    int(cfg["cost"]),
+                                )
+                                if refund_row:
+                                    await c.execute(
+                                        """
+                                        INSERT INTO ai_credit_transactions(
+                                            user_id, amount, transaction_type,
+                                            balance_after, metadata
+                                        )
+                                        VALUES($1,$2,$3,$4,$5::jsonb)
+                                        """,
+                                        user_id,
+                                        int(cfg["cost"]),
+                                        "ARENA_QUIZ_CREATE_REFUND",
+                                        refund_row["balance"],
+                                        json.dumps({
+                                            "source": "ai_quiz_arena",
+                                            "session_id": session_id,
+                                            "reason": str(e)[:300],
+                                        }),
+                                    )
+                        refund_succeeded = bool(refund_row)
+                    except Exception:
+                        log.exception(
+                            "CRITICAL: Arena credit refund failed for session %s",
+                            session_id,
+                        )
+
+                # Always release this session's partial-unique-index slot.
+                try:
                     async with self.db.pool.acquire() as c:
                         await c.execute(
-                            "UPDATE arena_sessions SET status='failed',ended_at=NOW() WHERE id=$1 AND status='ready'",
-                            session_id
+                            """
+                            UPDATE arena_sessions
+                            SET status='failed', ended_at=NOW()
+                            WHERE id=$1
+                              AND status IN ('draft','generating','ready')
+                            """,
+                            session_id,
                         )
-                    raise RuntimeError("INSUFFICIENT_CREDITS")
-
-                async with self.db.pool.acquire() as c:
-                    await c.execute(
-                        """INSERT INTO arena_destinations(session_id,chat_id,chat_type,title)
-                           VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING""",
-                        session_id, cfg["chat_id"], cfg["chat_type"], cfg["title"]
+                except Exception:
+                    log.exception(
+                        "Could not mark failed Arena session %s",
+                        session_id,
                     )
 
-                await status_message.reply_text(
-                    f"✅ Quiz ready! {cfg['count']} questions prepared. "
-                    f"Credits used: {cfg['cost']}. Starting in 3 seconds."
-                )
-                context.job_queue.run_once(
-                    self._tick, when=3, data={"session_id": session_id},
-                    name=f"arena:{session_id}"
-                )
                 self.configs.pop(user_id, None)
-            except Exception as e:
-                async with self.db.pool.acquire() as c:
-                    await c.execute(
-                        """UPDATE arena_sessions SET status='failed',ended_at=NOW()
-                           WHERE id=$1 AND status IN ('draft','generating')""",
-                        session_id
+                self.preparation_errors.pop(session_id, None)
+
+                error_code = str(e)
+                if error_code == "ARENA_BUSY" or getattr(e, "sqlstate", None) == "23505":
+                    message = (
+                        "⏳ Another AI Quiz Arena session is already running. "
+                        "Wait for it to finish, or stop your own previous quiz "
+                        "with /stop before starting another."
                     )
-                log.exception("Arena session start failed: %s", e)
-                self.configs.pop(user_id, None)
-                message = (
-                    "❌ Credits changed before quiz start; please check /credits."
-                    if str(e) == "INSUFFICIENT_CREDITS"
-                    else "❌ Quiz setup failed. No credits were deducted. Please run /quiz again."
-                )
-                await status_message.reply_text(message)
+                elif error_code == "INSUFFICIENT_CREDITS":
+                    message = (
+                        "❌ Your available credits changed before the quiz started. "
+                        "No credits were deducted. Check /credits and try again."
+                    )
+                elif error_code == "QUESTION_PREPARATION_FAILED":
+                    message = (
+                        "❌ Question preparation failed. No credits were deducted. "
+                        "Please run /quiz again. Check Render logs for the preparation error."
+                    )
+                elif error_code in (
+                    "PREPARED_QUESTION_SET_INCOMPLETE",
+                    "SESSION_NOT_DRAFT",
+                ):
+                    message = (
+                        "❌ The prepared quiz session is incomplete or expired. "
+                        "No credits were deducted. Please run /quiz again."
+                    )
+                elif credits_committed and not refund_succeeded:
+                    message = (
+                        "⚠️ Quiz setup failed after credit processing. "
+                        "Please check /credits before retrying and share the "
+                        "Arena session-start traceback from Render logs."
+                    )
+                else:
+                    message = (
+                        "❌ Quiz setup failed. No credits were deducted. "
+                        "Please run /quiz again. If it repeats, share the "
+                        "Arena session-start traceback from Render logs."
+                    )
+
+                try:
+                    await status_message.reply_text(message)
+                except Exception:
+                    log.exception(
+                        "Could not send Arena setup failure message for %s",
+                        session_id,
+                    )
 
     async def _generate(self, chapter: str, language: str, count: int) -> list[dict]:
         if not self.provider:
@@ -605,7 +790,19 @@ class QuizArena:
 
     @staticmethod
     def _row_question(r):
-        return {"question":r["question"],"options":r["options"],"correct_index":int(r["correct_index"]),"explanation":r["explanation"]}
+        options = r["options"]
+        # asyncpg returns JSON/JSONB as a JSON string unless a custom codec
+        # is configured. Telegram send_poll requires a Python list.
+        if isinstance(options, str):
+            options = json.loads(options)
+        if not isinstance(options, list):
+            raise ValueError("Question bank options are not a valid JSON array")
+        return {
+            "question": r["question"],
+            "options": options,
+            "correct_index": int(r["correct_index"]),
+            "explanation": r["explanation"],
+        }
 
     async def _save_bank(self, chapter, language, questions):
 
