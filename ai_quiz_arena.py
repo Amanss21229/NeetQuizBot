@@ -625,6 +625,7 @@ class QuizArena:
                     normalized_old = re.sub(r"\W+", "", existing_question["question"].lower())
                     seen_hashes.add(hashlib.sha256(normalized_new.encode("utf-8")).hexdigest())
                     seen_hashes.add(hashlib.sha256(normalized_old.encode("utf-8")).hexdigest())
+                unique_generated = []
                 for item in generated:
                     normalized_new = re.sub(r"\s+", "", item["question"].casefold())
                     normalized_old = re.sub(r"\W+", "", item["question"].lower())
@@ -633,22 +634,41 @@ class QuizArena:
                         hashlib.sha256(normalized_old.encode("utf-8")).hexdigest(),
                     }
                     if digests & seen_hashes:
-                        raise ValueError("Generated question duplicates an existing approved bank question")
+                        log.warning(
+                            "Arena skipped generated duplicate against question bank: session=%s",
+                            session_id,
+                        )
+                        continue
                     seen_hashes.update(digests)
-                questions.extend(generated)
-                await self._save_bank(cfg["chapter"], cfg["language"], generated)
+                    unique_generated.append(item)
+                questions.extend(unique_generated)
+                if unique_generated:
+                    await self._save_bank(cfg["chapter"], cfg["language"], unique_generated)
 
-            if len(questions) != int(cfg["count"]):
-                raise RuntimeError("Question generator returned an incomplete set")
+            requested_count = int(cfg["count"])
+            minimum_count = max(1, math.ceil(requested_count * 0.80))
+            if len(questions) < minimum_count:
+                raise RuntimeError(
+                    f"Insufficient valid questions: {len(questions)}/{requested_count}; "
+                    f"minimum required is {minimum_count} (80%)."
+                )
+            if len(questions) < requested_count:
+                log.warning(
+                    "Arena flexible mode: proceeding with %s/%s validated questions "
+                    "(minimum=%s), session=%s",
+                    len(questions), requested_count, minimum_count, session_id,
+                )
 
             async with self.db.pool.acquire() as c:
                 await c.execute(
                     """UPDATE arena_sessions
                        SET questions=$2::jsonb,
+                           question_count=$3,
                            invite_expires_at=NOW()+INTERVAL '15 minutes'
                        WHERE id=$1 AND status='draft'""",
                     session_id,
                     json.dumps(questions, ensure_ascii=False),
+                    len(questions),
                 )
             if context:
                 try:
@@ -670,10 +690,11 @@ class QuizArena:
                     await context.bot.send_message(
                         chat_id=cfg["chat_id"],
                         text=(
-                            f"✅ {len(questions)} questions are ready and passed structural validation.\\n\\n"
-                            f"📖 {cfg['chapter']}\\n"
-                            f"🆔 Session ID: {cfg.get('session_code') or session_id}\\n"
-                            "Invite friends/groups, or start the quiz."
+                            f"✅ {len(questions)} questions are ready and passed structural validation.\\n"
+                            + (f"ℹ️ Requested: {requested_count}; available: {len(questions)}. Invalid items were skipped.\\n\\n" if len(questions) < requested_count else "\\n")
+                            + f"📖 {cfg['chapter']}\\n"
+                            + f"🆔 Session ID: {cfg.get('session_code') or session_id}\\n"
+                            + "Invite friends/groups, or start the quiz."
                         ),
                         reply_markup=InlineKeyboardMarkup(buttons),
                     )
@@ -770,14 +791,22 @@ class QuizArena:
                 if isinstance(questions, str):
                     questions = json.loads(questions)
 
-                if len(questions) != int(cfg["count"]):
-                    raise RuntimeError("PREPARED_QUESTION_SET_INCOMPLETE")
-
-                cost = int(cfg["cost"])
+                requested_count = int(cfg["count"])
+                actual_count = len(questions)
+                minimum_count = max(1, math.ceil(requested_count * 0.80))
+                if actual_count < minimum_count:
+                    raise RuntimeError(
+                        f"PREPARED_QUESTION_SET_INCOMPLETE: {actual_count}/{requested_count}; "
+                        f"minimum={minimum_count}"
+                    )
+                cfg["count"] = actual_count
+                cost = math.ceil(actual_count / 5)
+                cfg["cost"] = cost
                 metadata = {
                     "source": "ai_quiz_arena",
                     "session_id": session_id,
-                    "questions": int(cfg["count"]),
+                    "questions": actual_count,
+                    "requested_questions": requested_count,
                 }
 
                 # All database-side setup is atomic. Group locks are claimed
@@ -897,8 +926,9 @@ class QuizArena:
                 self.configs.pop(user_id, None)
                 try:
                     await status_message.reply_text(
-                        f"✅ Quiz ready! {cfg['count']} questions prepared. "
-                        f"Credits used: {cost}. Starting in 3 seconds."
+                        f"✅ Quiz ready! {actual_count} questions prepared. "
+                        + (f"(requested {requested_count}; invalid questions skipped)\n" if actual_count < requested_count else "")
+                        + f"Credits used: {cost}. Starting in 3 seconds."
                     )
                 except Exception:
                     # The scheduled quiz must continue even if the status
@@ -1066,103 +1096,136 @@ class QuizArena:
             raise RuntimeError("Gemini API is not configured. Set GEMINI_API_KEY.")
         lang = "Hindi" if language == "hindi" else "English"
         source_block = (
-            "CURATED SOURCE CONTEXT (use as primary grounding; do not contradict it):\\n"
+            "CURATED SOURCE CONTEXT (use as primary grounding; do not contradict it):\n"
             + source_context
             if source_context else
-            "No curated NCERT/latest-syllabus/PYQ source text is stored for this chapter. Use conservative established knowledge, avoid uncertain/out-of-syllabus claims, and do not claim exact PYQ provenance.\\n"
+            "No curated NCERT/latest-syllabus/PYQ source text is stored for this chapter. Use conservative established knowledge, avoid uncertain/out-of-syllabus claims, and do not claim exact PYQ provenance.\n"
         )
-        prompt = f'''Create exactly {count} distinct NEET-UG single-correct MCQs for the NCERT chapter: {chapter}. Language: {lang}.
+        prompt = f"""Create exactly {count} distinct NEET-UG single-correct MCQs for the NCERT chapter: {chapter}. Language: {lang}.
 {source_block}
 Use the combined study scope: NCERT concepts, the latest NEET-UG syllabus boundaries, and NEET previous-year question (PYQ) patterns. Include NEET-style objective formats such as assertion-reason and statement-based questions, but convert every item into exactly four options with exactly one correct option.
 Do not claim an item is an actual PYQ unless its exact year is independently verified from supplied source material. If not verified, set pyq_year to null. Never invent a PYQ year, citation, fact, or out-of-syllabus content.
 Avoid duplicates and near-duplicates. Check the exact answer and provide a concise explanation.
-Return ONLY a valid JSON array. Each object must contain: question, options (exactly 4 strings), correct_index (0-3), explanation (short poll explanation, <=180 characters), detailed_solution (clear step-by-step reasoning, <=3500 characters), pyq_year (integer year only when verified, otherwise null), question_type (single_correct, assertion_reason, or statement_based).
-Append the literal text "【@DrQuizRobot】" at the end of every question. No markdown fences.'''
+Return ONLY a valid JSON array. Every item must contain: question, options (exactly 4 distinct strings, each <=100 characters), correct_index (integer 0-3, never a string), explanation (1-180 characters), detailed_solution (1-3500 characters), pyq_year (integer or null), question_type (single_correct, assertion_reason, or statement_based).
+The question must be <=280 characters BEFORE the required attribution. Append the literal text "【@DrQuizRobot】" at the end of every question. Do not use markdown fences."""
         raw = await self.provider.generate(
             [ChatMessage(role="user", content=prompt)],
-            "You are a careful NEET-UG question writer. Accuracy is more important than speed. If uncertain about a fact, do not include it.",
+            "You are a careful NEET-UG question writer. Accuracy is more important than speed. Return valid JSON matching every field and length limit.",
             max_output_tokens=8192,
             timeout_seconds=120,
         )
         try:
-            return self._parse_generated(raw, count)
-        except (ValueError, TypeError, json.JSONDecodeError) as validation_error:
-            # Only spend a repair call when local validation detects a malformed
-            # or structurally invalid response; normal generations use one call.
+            valid, errors = self._parse_generated(raw, count, allow_partial=True)
+        except (ValueError, TypeError, json.JSONDecodeError) as first_error:
+            valid, errors = [], [f"response_parse_error: {str(first_error)[:250]}"]
+
+        missing = count - len(valid)
+        if missing > 0:
             repair_prompt = (
-                "Repair the following NEET MCQ JSON response. Fix ONLY the listed "
-                "structural/validation problems, preserve valid questions, do not "
-                "invent PYQ years, and return exactly the requested number of "
-                "questions as valid JSON with fields question, options, "
-                "correct_index, explanation, pyq_year, question_type. "
-                f"Required count: {count}. Validation error: {str(validation_error)[:500]}. "
-                f"Source context:\\n{source_context[:12000]}\\n"
-                f"Original response:\\n{str(raw)[:24000]}"
+                f"Generate {missing} NEW valid NEET MCQs as a JSON array. Do not repeat any question in the original response. "
+                "Each object must have question, options (exactly four distinct strings <=100 chars), correct_index "
+                "(integer 0-3), explanation (1-180 chars), detailed_solution (1-3500 chars), pyq_year (null unless verified), "
+                "and question_type (single_correct/assertion_reason/statement_based). Question <=280 chars before appending "
+                "【@DrQuizRobot】. Return JSON only. Preserve NCERT/syllabus accuracy. "
+                f"Validation issues in first response: {errors[:12]}.\n"
+                f"Already valid questions (do not repeat): {json.dumps([q['question'] for q in valid], ensure_ascii=False)}\n"
+                f"Source context:\n{source_context[:10000]}\nOriginal response:\n{str(raw)[:18000]}"
             )
-            repaired = await self.provider.generate(
-                [ChatMessage(role="user", content=repair_prompt)],
-                "You repair malformed quiz JSON. Do not add unsupported facts or PYQ years.",
-                max_output_tokens=8192,
-                timeout_seconds=120,
+            try:
+                repaired = await self.provider.generate(
+                    [ChatMessage(role="user", content=repair_prompt)],
+                    "Generate only structurally valid, accurate NEET MCQs in JSON. Do not invent PYQ provenance.",
+                    max_output_tokens=8192,
+                    timeout_seconds=120,
+                )
+                repaired_valid, repair_errors = self._parse_generated(repaired, missing, allow_partial=True)
+                seen = {re.sub(r"\s+", "", q["question"].casefold()) for q in valid}
+                for item in repaired_valid:
+                    key = re.sub(r"\s+", "", item["question"].casefold())
+                    if key not in seen and len(valid) < count:
+                        valid.append(item)
+                        seen.add(key)
+                errors.extend(repair_errors)
+            except Exception as repair_error:
+                errors.append(f"repair_failed: {str(repair_error)[:250]}")
+
+        if errors:
+            log.warning(
+                "Arena generation validation: requested=%s valid=%s skipped_or_repair_issues=%s",
+                count, len(valid), errors[:15],
             )
-            return self._parse_generated(repaired, count)
+        if not valid:
+            raise ValueError("Gemini returned no structurally valid questions")
+        return valid[:count]
 
     @staticmethod
-    def _parse_generated(raw: str, count: int) -> list[dict]:
+    def _parse_generated(raw: str, count: int, allow_partial: bool = False):
         raw = str(raw or "").strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
         data = json.loads(raw)
-        if not isinstance(data, list) or len(data) != count:
+        if not isinstance(data, list):
+            raise ValueError("AI output was not a JSON array")
+        if not allow_partial and len(data) != count:
             raise ValueError("AI output did not contain the exact requested question count")
-        out, seen = [], set()
-        for item in data:
-            if not isinstance(item, dict):
-                raise ValueError("AI returned a question that is not a JSON object")
-            q = str(item.get("question", "")).strip()
-            opts = item.get("options")
-            idx = item.get("correct_index")
-            explanation = str(item.get("explanation", "")).strip()
-            detailed_solution = str(item.get("detailed_solution") or explanation).strip()
-            # No primary PYQ source is bundled with this bot, so AI-generated
-            # questions must never be labelled with an unverified PYQ year.
-            pyq_year = None
-            question_type = str(item.get("question_type") or "single_correct").strip().lower()
-            if question_type not in ("single_correct", "assertion_reason", "statement_based"):
-                question_type = "single_correct"
-            if not q:
-                raise ValueError("AI produced an empty question")
-            if not q.endswith("【@DrQuizRobot】"):
-                q = q.rstrip() + " 【@DrQuizRobot】"
-            if (
-                not isinstance(opts, list)
-                or len(opts) != 4
-                or any(not isinstance(x, str) or not x.strip() for x in opts)
-                or len({re.sub(r"\s+", "", x.casefold()) for x in opts}) != 4
-                or not isinstance(idx, int)
-                or isinstance(idx, bool)
-                or idx not in range(4)
-                or not explanation
-                or len(q) > 300
-                or any(len(x.strip()) > 100 for x in opts)
-                or len(explanation) > 180
-                or not detailed_solution
-                or len(detailed_solution) > 3500
-            ):
-                raise ValueError("AI produced an invalid Telegram quiz question structure")
-            norm = re.sub(r"\s+", "", q.casefold())
-            if norm in seen:
-                raise ValueError("AI produced duplicate questions")
-            seen.add(norm)
-            out.append({
-                "question": q,
-                "options": [x.strip() for x in opts],
-                "correct_index": idx,
-                "explanation": explanation,
-                "detailed_solution": detailed_solution,
-                "pyq_year": pyq_year,
-                "question_type": question_type,
-            })
-        return out
+
+        out, seen, errors = [], set(), []
+        for position, item in enumerate(data, start=1):
+            try:
+                if not isinstance(item, dict):
+                    raise ValueError("not_a_json_object")
+                q = str(item.get("question", "")).strip()
+                opts = item.get("options")
+                idx = item.get("correct_index")
+                explanation = str(item.get("explanation", "")).strip()
+                detailed_solution = str(item.get("detailed_solution") or explanation).strip()
+                pyq_year = None
+                question_type = str(item.get("question_type") or "single_correct").strip().lower()
+                if question_type not in ("single_correct", "assertion_reason", "statement_based"):
+                    question_type = "single_correct"
+                if not q:
+                    raise ValueError("empty_question")
+                if not q.endswith("【@DrQuizRobot】"):
+                    q = q.rstrip() + " 【@DrQuizRobot】"
+                if len(q) > 300:
+                    raise ValueError(f"question_too_long:{len(q)}")
+                if not isinstance(opts, list) or len(opts) != 4:
+                    raise ValueError("options_count_not_4")
+                if any(not isinstance(x, str) or not x.strip() for x in opts):
+                    raise ValueError("empty_or_non_string_option")
+                if len({re.sub(r"\s+", "", x.casefold()) for x in opts}) != 4:
+                    raise ValueError("duplicate_options")
+                if any(len(x.strip()) > 100 for x in opts):
+                    raise ValueError("option_too_long")
+                if not isinstance(idx, int) or isinstance(idx, bool) or idx not in range(4):
+                    raise ValueError("invalid_correct_index")
+                if not explanation:
+                    raise ValueError("empty_explanation")
+                if len(explanation) > 180:
+                    raise ValueError(f"explanation_too_long:{len(explanation)}")
+                if not detailed_solution:
+                    raise ValueError("empty_detailed_solution")
+                if len(detailed_solution) > 3500:
+                    raise ValueError(f"detailed_solution_too_long:{len(detailed_solution)}")
+                norm = re.sub(r"\s+", "", q.casefold())
+                if norm in seen:
+                    raise ValueError("duplicate_question")
+                seen.add(norm)
+                out.append({
+                    "question": q,
+                    "options": [x.strip() for x in opts],
+                    "correct_index": idx,
+                    "explanation": explanation,
+                    "detailed_solution": detailed_solution,
+                    "pyq_year": pyq_year,
+                    "question_type": question_type,
+                })
+                if len(out) >= count:
+                    break
+            except (ValueError, TypeError, AttributeError) as item_error:
+                errors.append(f"item_{position}:{str(item_error)[:100]}")
+        if not allow_partial and len(out) != count:
+            raise ValueError(f"Only {len(out)}/{count} valid questions")
+        return out, errors
 
     @staticmethod
     def _row_question(r):
