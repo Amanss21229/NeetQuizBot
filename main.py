@@ -647,6 +647,8 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("quiz", self.quiz_arena.command))
         self.application.add_handler(CommandHandler("stop", self.quiz_arena.stop_command))
         self.application.add_handler(CommandHandler("accept", self.quiz_arena.accept_command))
+        self.application.add_handler(CommandHandler("reject", self.quiz_arena.reject_command))
+        self.application.add_handler(CommandHandler("quizstatus", self.quiz_arena.quizstatus_command))
         self.application.add_handler(CommandHandler("refresh", self.refresh_command))
         self.application.add_handler(CommandHandler("createbuttonpost", self.create_button_post_command))
         self.application.add_handler(CommandHandler("mypost", self.my_posts_command))        
@@ -688,6 +690,15 @@ Hello! To use this bot, you need to join our official groups/channels first.
         self.application.add_handler(CommandHandler("pauseclone", self.pauseclone_command))
         self.application.add_handler(CommandHandler("resumeclone", self.resumeclone_command))
         self.application.add_handler(CommandHandler("clonelist", self.clonelist_command))
+
+        # Direct Session ID entry for Arena invitations and waiting-room joins.
+        self.application.add_handler(
+            MessageHandler(
+                filters.Regex(r"(?i)^NQ-[A-Z0-9]{1,8}-[0-9]{8}$"),
+                self.quiz_arena.session_code_message
+            ),
+            group=0
+        )
 
         # Top users/groups commands
         self.application.add_handler(CommandHandler("top", self.top_command))
@@ -901,6 +912,8 @@ Hello! To use this bot, you need to join our official groups/channels first.
             BotCommand("quiz", "Create an AI NEET quiz"),
             BotCommand("stop", "Stop the active Arena quiz here"),
             BotCommand("accept", "Accept a shared Arena quiz invitation"),
+            BotCommand("reject", "Reject a shared Arena quiz invitation"),
+            BotCommand("quizstatus", "Show your Arena quiz status"),
             BotCommand("aistats", "Private AI operations"),
             BotCommand("aiuser", "Inspect AI user stats"),
             BotCommand("aitop", "Top AI usage"),
