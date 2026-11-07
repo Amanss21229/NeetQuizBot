@@ -24,3 +24,8 @@ Group members can send a plain Session ID only if the bot can receive ordinary g
 Verification performed
 Python syntax compilation passed for all .py files in the project.
 No live Telegram Bot API, Render deployment, or Neon database integration test was possible in this environment. Therefore this package is not represented as guaranteed 100% live-working; it must be deployed and tested in your bot's actual Telegram chats and Neon database.
+
+
+## 2026-11-07 — Flexible Arena generation
+
+See `AI_QUIZ_ARENA_FLEXIBLE_MODE.md`. Invalid individual questions are skipped; one repair request attempts to fill the gaps; sessions proceed with at least 80% valid questions. Actual question count and credit cost are used. No SQL migration is required.
