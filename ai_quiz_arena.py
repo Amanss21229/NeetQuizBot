@@ -464,32 +464,125 @@ class QuizArena:
                 question_index = int(parts[3])
                 async with self.db.pool.acquire() as c:
                     row = await c.fetchrow(
-                        "SELECT chapter,questions FROM arena_sessions WHERE id=$1",
+                        "SELECT chapter,questions,status FROM arena_sessions WHERE id=$1",
                         session_id,
                     )
+
                 if not row:
-                    await q.answer("Solution is no longer available.", show_alert=True)
+                    await q.answer("This quiz or its solution is no longer available.", show_alert=True)
                     return True
+
+                # Detailed solutions remain locked until the complete Arena
+                # session has finished (not merely until one poll closes).
+                if row["status"] != "finished":
+                    if row["status"] in ("ready", "active"):
+                        await q.answer(
+                            "⏳ Quiz abhi chal raha hai! Detailed solutions quiz complete hone ke baad unlock honge. Please wait.",
+                            show_alert=True,
+                        )
+                    else:
+                        await q.answer(
+                            "ℹ️ This quiz did not finish, so its detailed solutions are unavailable.",
+                            show_alert=True,
+                        )
+                    return True
+
                 questions = row["questions"] or []
                 if isinstance(questions, str):
                     questions = json.loads(questions)
                 if question_index < 0 or question_index >= len(questions):
-                    await q.answer("Solution is no longer available.", show_alert=True)
+                    await q.answer("This question's solution is no longer available.", show_alert=True)
                     return True
+
                 item = questions[question_index]
-                solution = (item.get("detailed_solution") or item.get("explanation") or "Detailed solution is unavailable.")[:3800]
-                await q.answer("Detailed solution")
-                if q.message:
-                    await q.message.reply_text(
-                        f"📘 <b>Detailed Solution</b>\\n"
-                        f"📖 {self._escape(row['chapter'])} · Q{question_index + 1}\\n\\n"
-                        f"{self._escape(solution)}",
+                question = str(item.get("question") or "Question text unavailable.")
+                options = item.get("options") or []
+                correct_index = int(item.get("correct_index", -1))
+                solution = str(
+                    item.get("detailed_solution")
+                    or item.get("explanation")
+                    or "Detailed solution is unavailable."
+                )
+
+                option_lines = []
+                for index, option in enumerate(options):
+                    label = chr(65 + index) if index < 26 else str(index + 1)
+                    option_lines.append(f"{label}. {self._escape(option)}")
+
+                correct_answer = (
+                    self._escape(options[correct_index])
+                    if 0 <= correct_index < len(options)
+                    else "Not available"
+                )
+
+                question_block = (
+                    f"📘 <b>NEET QUIZ — QUESTION {question_index + 1}</b>\\n"
+                    f"📖 <b>Chapter:</b> {self._escape(row['chapter'])}\\n\\n"
+                    f"<b>Question:</b> {self._escape(question)}\\n\\n"
+                    f"<b>Options:</b>\\n" + "\\n".join(option_lines) + "\\n\\n"
+                    f"✅ <b>Correct answer:</b> {correct_answer}"
+                )
+                solution_block = (
+                    f"🧠 <b>DETAILED SOLUTION</b>\\n\\n"
+                    f"{self._escape(solution)}"
+                )
+
+                # Send only to the clicking user's private chat. Never post
+                # the detailed solution as a reply in the source group.
+                private_chat_id = q.from_user.id
+                full_text = question_block + "\\n\\n" + solution_block
+                if len(full_text) <= 3800:
+                    await context.bot.send_message(
+                        chat_id=private_chat_id,
+                        text=full_text,
                         parse_mode="HTML",
+                        disable_web_page_preview=True,
                     )
+                else:
+                    # Keep both the question and the full solution within
+                    # Telegram's per-message text limit.
+                    await context.bot.send_message(
+                        chat_id=private_chat_id,
+                        text=question_block,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+                    await context.bot.send_message(
+                        chat_id=private_chat_id,
+                        text=solution_block,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
+
+                await q.answer("📩 Detailed solution sent to your private chat.")
+                return True
+
+            except Forbidden:
+                await q.answer(
+                    "🚀 Open @DrQuizRobot and press Start to receive detailed solutions. If blocked, unblock the bot first.",
+                    show_alert=True,
+                )
+                return True
+            except BadRequest as exc:
+                error_text = str(exc).lower()
+                if any(marker in error_text for marker in (
+                    "chat not found",
+                    "bot can't initiate conversation",
+                    "bot cannot initiate conversation",
+                    "user is deactivated",
+                    "bot was blocked by the user",
+                )):
+                    await q.answer(
+                        "🚀 Open @DrQuizRobot and press Start to receive detailed solutions. If blocked, unblock the bot first.",
+                        show_alert=True,
+                    )
+                    return True
+                log.exception("Arena detailed solution delivery failed")
+                await q.answer("Could not send the solution. Please try again.", show_alert=True)
                 return True
             except Exception:
                 log.exception("Arena detailed solution callback failed")
-                await q.answer("Could not load the detailed solution.", show_alert=True)
+                await q.answer("Could not load the detailed solution. Please try again.", show_alert=True)
                 return True
         if action in ("accept", "reject"):
             session_id = parts[2]
