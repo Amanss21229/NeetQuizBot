@@ -404,7 +404,7 @@ class QuizArena:
                     ]
                     await context.bot.send_message(
                         cfg["chat_id"],
-                        "🧪 Beta limit: is chapter/language bank mein abhi 1,000 approved questions complete nahi hue hain. AI generation ke liye maximum 20 questions select karein.",
+                        "🧪 Beta limit: Hlo Dear, Abhi ye feature Testing Mode (Beta Version) me hai. Isliye ek baar me aap maximum 20 quiz hi create kar sakte hai. AI generation ke liye maximum 20 questions select karein. Koi Suggestion/ Help/ ya Apna feedback dene ke liye aap owner (@Aman_PersonalBot) pe contact kar sakte hai.",
                         reply_markup=InlineKeyboardMarkup(limited),
                     )
                     return True
