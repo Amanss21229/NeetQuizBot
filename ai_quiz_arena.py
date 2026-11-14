@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup,
+    CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup,
     InlineQueryResultArticle, InputTextMessageContent,
 )
 from telegram.constants import ChatType
@@ -341,10 +341,15 @@ class QuizArena:
                 user.id,
             )
         if existing_session:
+            active_code = existing_session['session_code'] or existing_session['id']
             await update.effective_message.reply_text(
-                f"⏳ You already have a {existing_session['status']} Arena session "
-                f"for {existing_session['chapter']} (ID: {existing_session['session_code'] or existing_session['id']}). "
-                "Finish it or use /stop before creating another."
+                "⏳ <b>YOU ALREADY HAVE A QUIZ SESSION</b>\n\n"
+                f"📖 <b>Chapter:</b> {self._escape(existing_session['chapter'])}\n"
+                f"📍 <b>Status:</b> {existing_session['status'].upper()}\n"
+                f"🆔 <b>Session ID:</b> <code>{self._escape(active_code)}</code>\n\n"
+                "Finish this session or use /stop before creating another.",
+                parse_mode="HTML",
+                reply_markup=self._session_copy_markup(active_code),
             )
             return
         balance_row = await self.db.get_ai_credits(user.id)
@@ -364,8 +369,15 @@ class QuizArena:
             kb.append(count_row)
         kb.append([InlineKeyboardButton(f"⏱ {s} sec", callback_data=f"arena:time:{s}") for s in TIMES])
         await update.effective_message.reply_text(
-            f"🧠 *NEET QUIZ ARENA*\n\n📖 Chapter: *{chapter}*\n💳 Available credits: *{balance}*\n\n1) Choose language\n2) Choose number of questions\n3) Choose time per question\n\n1 credit = 5 questions. A {45}-question quiz costs 9 credits.",
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+            "🧠 <b>NEET QUIZ ARENA</b>\n"
+            f"<blockquote>📖 <b>Chapter</b>  {self._escape(chapter)}\n"
+            f"💳 <b>Available credits</b>  {balance}</blockquote>\n"
+            "<b>BUILD YOUR QUIZ</b>\n"
+            "① Select your language\n"
+            "② Choose the number of questions\n"
+            "③ Set the time allowed per question\n\n"
+            "<i>1 credit = 5 questions  •  45 questions = 9 credits</i>",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
     async def callback(self, q, context) -> bool:
         data = q.data or ""
@@ -402,7 +414,16 @@ class QuizArena:
                 bal = await self.db.get_ai_credits(user_id)
                 balance = int(bal["balance"]) if bal else 0
                 if balance < cost:
-                    await context.bot.send_message(cfg["chat_id"], f"❌ Insufficient credits. This quiz needs {cost} credits; your balance is {balance}.")
+                    await context.bot.send_message(
+                        chat_id=cfg["chat_id"],
+                        text=(
+                            "💳 <b>NOT ENOUGH CREDITS</b>\n\n"
+                            f"This quiz requires <b>{cost}</b> credits.\n"
+                            f"Your current balance is <b>{balance}</b>.\n\n"
+                            "Add credits before starting another quiz."
+                        ),
+                        parse_mode="HTML",
+                    )
                     self.configs.pop(user_id, None); return True
                 invite_token = uuid.uuid4().hex[:16]
                 draft_id = uuid.uuid4().hex
@@ -429,13 +450,21 @@ class QuizArena:
                 cfg["invite_token"] = invite_token
                 cfg["cost"] = cost
                 await context.bot.send_message(
-                    cfg["chat_id"],
-                    f"🧠 Preparing your NEET quiz...\\n\\n"
-                    f"📖 {cfg['chapter']} · {cfg['language'].title()}\\n"
-                    f"❓ {cfg['count']} questions · ⏱ {cfg['seconds']} sec/question\\n"
-                    f"💳 Cost: {cost} credit(s)\\n"
-                    f"🆔 Session ID: {session_code}\\n"
-                    "Invitation and start buttons will appear after validation."
+                    chat_id=cfg["chat_id"],
+                    text=(
+                        "🧠 <b>PREPARING YOUR NEET QUIZ</b>\n"
+                        "<i>Building and validating your question set…</i>\n\n"
+                        f"<blockquote>📖 <b>Chapter</b>  {self._escape(cfg['chapter'])}\n"
+                        f"🌐 <b>Language</b>  {cfg['language'].title()}\n"
+                        f"❓ <b>Questions</b>  {cfg['count']}\n"
+                        f"⏱ <b>Time per question</b>  {cfg['seconds']} seconds\n"
+                        f"💳 <b>Credits</b>  {cost}</blockquote>\n"
+                        f"🆔 <b>SESSION ID</b>\n<code>{self._escape(session_code)}</code>\n\n"
+                        "<i>Keep this ID handy. You can copy it below to share or join the quiz.</i>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=self._session_copy_markup(session_code),
+                    disable_web_page_preview=True,
                 )
                 # Prepare and validate questions before presenting the final start/invite buttons.
                 task = asyncio.create_task(self._prepare_questions(draft_id, cfg.copy(), context))
@@ -504,33 +533,37 @@ class QuizArena:
                     or "Detailed solution is unavailable."
                 )
 
-                option_lines = []
-                for index, option in enumerate(options):
-                    label = chr(65 + index) if index < 26 else str(index + 1)
-                    option_lines.append(f"{label}. {self._escape(option)}")
-
                 correct_answer = (
                     self._escape(options[correct_index])
                     if 0 <= correct_index < len(options)
                     else "Not available"
                 )
 
+                option_lines = [
+                    f"<b>{chr(65 + index)}.</b>  {self._escape(option)}"
+                    for index, option in enumerate(options)
+                ]
                 question_block = (
-                    f"📘 <b>NEET QUIZ — QUESTION {question_index + 1}</b>\\n"
-                    f"📖 <b>Chapter:</b> {self._escape(row['chapter'])}\\n\\n"
-                    f"<b>Question:</b> {self._escape(question)}\\n\\n"
-                    f"<b>Options:</b>\\n" + "\\n".join(option_lines) + "\\n\\n"
-                    f"✅ <b>Correct answer:</b> {correct_answer}"
+                    "🧠 <b>NEET QUIZ ARENA</b>\n"
+                    f"<blockquote>📚 <b>{self._escape(row['chapter'])}</b>\n"
+                    f"🔢 <b>Question {question_index + 1}</b></blockquote>\n\n"
+                    "📝 <b>QUESTION</b>\n"
+                    f"<blockquote>{self._escape(question)}</blockquote>\n\n"
+                    "🔘 <b>OPTIONS</b>\n"
+                    + "\n".join(option_lines)
+                    + "\n\n✅ <b>CORRECT ANSWER</b>\n"
+                    f"<blockquote>{correct_answer}</blockquote>"
                 )
                 solution_block = (
-                    f"🧠 <b>DETAILED SOLUTION</b>\\n\\n"
-                    f"{self._escape(solution)}"
+                    "💡 <b>DETAILED SOLUTION</b>\n"
+                    f"<blockquote expandable>{self._escape(solution)}</blockquote>\n\n"
+                    "<i>Understand the concept. Remember the logic. Ace NEET.</i>"
                 )
 
                 # Send only to the clicking user's private chat. Never post
                 # the detailed solution as a reply in the source group.
                 private_chat_id = q.from_user.id
-                full_text = question_block + "\\n\\n" + solution_block
+                full_text = question_block + "\n\n" + solution_block
                 if len(full_text) <= 3800:
                     await context.bot.send_message(
                         chat_id=private_chat_id,
@@ -652,9 +685,14 @@ class QuizArena:
                         getattr(chat, "username", None), user_id
                     )
                 await q.answer("Quiz invitation accepted")
+                accepted_code = row['session_code'] or session_id
                 await q.edit_message_text(
-                    f"✅ Invitation accepted. Send this Session ID in this chat to join the waiting room:\n`{row['session_code'] or session_id}`",
-                    parse_mode="Markdown"
+                    "✅ <b>INVITATION ACCEPTED</b>\n\n"
+                    "Send this Session ID as a message in this chat to enter the waiting room:\n"
+                    f"<code>{self._escape(accepted_code)}</code>\n\n"
+                    "<i>You can also use the copy buttons below.</i>",
+                    parse_mode="HTML",
+                    reply_markup=self._session_copy_markup(accepted_code),
                 )
             except Exception as e:
                 log.exception("arena invite accept failed: %s", e)
@@ -767,7 +805,7 @@ class QuizArena:
                 try:
                     invite_token = cfg.get("invite_token")
                     buttons = [
-                        [InlineKeyboardButton("▶️ START QUIZ", callback_data="arena:start")],
+                        [InlineKeyboardButton("▶️  START QUIZ", callback_data="arena:start", style="success")],
                     ]
                     if invite_token:
                         buttons.append([
@@ -780,16 +818,32 @@ class QuizArena:
                                 switch_inline_query=f"arena_invite_group_{invite_token}",
                             ),
                         ])
+                    session_code = cfg.get("session_code") or session_id
+                    buttons.append([
+                        InlineKeyboardButton(
+                            "📋  COPY SESSION ID",
+                            copy_text=CopyTextButton(text=str(session_code)),
+                        ),
+                        InlineKeyboardButton(
+                            "📥  COPY JOIN COMMAND",
+                            copy_text=CopyTextButton(text=f"/accept {session_code}"),
+                        ),
+                    ])
                     await context.bot.send_message(
                         chat_id=cfg["chat_id"],
                         text=(
-                            f"✅ {len(questions)} questions are ready and passed structural validation.\\n"
-                            + (f"ℹ️ Requested: {requested_count}; available: {len(questions)}. Invalid items were skipped.\\n\\n" if len(questions) < requested_count else "\\n")
-                            + f"📖 {cfg['chapter']}\\n"
-                            + f"🆔 Session ID: {cfg.get('session_code') or session_id}\\n"
-                            + "Invite friends/groups, or start the quiz."
+                            "✨ <b>YOUR QUIZ IS READY</b>\n"
+                            f"<blockquote>📖 <b>{self._escape(cfg['chapter'])}</b>\n"
+                            f"❓ <b>{len(questions)} questions</b>  ·  ⏱ <b>{cfg['seconds']} sec each</b></blockquote>"
+                            + (f"\nℹ️ <i>{requested_count} requested · {len(questions)} validated. A few invalid questions were skipped.</i>\n" if len(questions) < requested_count else "\n")
+                            + f"🆔 <b>SESSION ID</b>\n<code>{self._escape(session_code)}</code>\n\n"
+                            + "<b>INVITE OTHERS</b>\n"
+                            + "Share the invite with friends or groups, or copy the join command below.\n"
+                            + "<i>Group: an admin sends the command in the group. Private: the user must press Start on @DrQuizRobot first.</i>"
                         ),
+                        parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup(buttons),
+                        disable_web_page_preview=True,
                     )
                 except Exception:
                     # Notification delivery must not invalidate a successfully
@@ -857,22 +911,23 @@ class QuizArena:
 
                 if not row:
                     await status_message.reply_text(
-                        "❌ This quiz setup has expired. Run /quiz again."
+                        "⚠️ <b>QUIZ SETUP EXPIRED</b>\nRun /quiz to create a fresh session.",
+                        parse_mode="HTML",
                     )
                     return
 
                 if row["status"] != "draft":
                     await status_message.reply_text(
-                        "⏳ This quiz setup is no longer available. "
-                        "Run /quiz to create a new one."
+                        "ℹ️ <b>THIS QUIZ SETUP IS NO LONGER AVAILABLE</b>\nRun /quiz to create a new session.",
+                        parse_mode="HTML",
                     )
                     return
 
                 task = self.preparation_tasks.get(session_id)
                 if task and not task.done():
                     await status_message.reply_text(
-                        "⚙️ Questions are still being prepared. "
-                        "Wait for the confirmation message, then press Done."
+                        "⚙️ <b>QUESTIONS ARE STILL PREPARING</b>\nPlease wait for the ready card, then tap <b>START QUIZ</b>.",
+                        parse_mode="HTML",
                     )
                     return
 
@@ -1019,9 +1074,12 @@ class QuizArena:
                 self.configs.pop(user_id, None)
                 try:
                     await status_message.reply_text(
-                        f"✅ Quiz ready! {actual_count} questions prepared. "
-                        + (f"(requested {requested_count}; invalid questions skipped)\n" if actual_count < requested_count else "")
-                        + f"Credits used: {cost}. Starting in 3 seconds."
+                        "🚀 <b>QUIZ STARTING</b>\n\n"
+                        f"✅ <b>{actual_count} questions</b> are ready.\n"
+                        + (f"<i>{requested_count} requested · invalid questions were skipped.</i>\n" if actual_count < requested_count else "")
+                        + f"💳 <b>Credits used:</b> {cost}\n"
+                        "⏱ The first question arrives in 3 seconds.",
+                        parse_mode="HTML",
                     )
                 except Exception:
                     # The scheduled quiz must continue even if the status
@@ -1445,32 +1503,39 @@ The question must be <=280 characters BEFORE the required attribution. Append th
         if not row or row["status"] not in ("draft", "generating", "ready") or (row["invite_expires_at"] and row["invite_expires_at"] <= datetime_now_utc()):
             await update.inline_query.answer([], cache_time=0, is_personal=True)
             return True
+        session_code = row['session_code'] or row['session_id']
         text = (
-            f"📨 NEET QUIZ INVITATION\\n\\n"
-            f"📖 Chapter: {row['chapter']}\\n"
-            f"🆔 Session ID: {row['session_code'] or row['session_id']}\\n"
-            f"🌐 Language: {row['language'].title()}\\n"
-            f"❓ Questions: {row['question_count']}\\n"
-            f"⏱ Time per question: {row['seconds']} sec\\n\\n"
-            f"━━━━━━━━━━━━━━━━━━\\n"
-            f"To accept: tap ACCEPT, then send the Session ID in the destination chat.\\n"
-            f"👥 Group admin: send `/accept {row['session_code'] or row['session_id']}` in the group. Members can send the ID individually to join the waiting room.\\n"
-            f"👤 Private: recipient must start the bot, then send `/accept {row['session_code'] or row['session_id']}` in the bot's private chat.\\n\\n"
-            f"Invitation expires 15 minutes after the quiz is ready."
+            "🎯 <b>YOU'RE INVITED TO A NEET QUIZ</b>\n"
+            "<i>Challenge yourself. Compete with friends.</i>\n\n"
+            f"<blockquote>📖 <b>Chapter</b>  {self._escape(row['chapter'])}\n"
+            f"🌐 <b>Language</b>  {row['language'].title()}\n"
+            f"❓ <b>Questions</b>  {row['question_count']}\n"
+            f"⏱ <b>Time per question</b>  {row['seconds']} sec</blockquote>\n"
+            f"🆔 <b>SESSION ID</b>\n<code>{self._escape(session_code)}</code>\n\n"
+            "<b>HOW TO JOIN</b>\n"
+            "① Tap <b>ACCEPT</b>.\n"
+            "② Send the Session ID in this chat to enter the waiting room.\n\n"
+            "👥 <b>Group:</b> A group admin accepts the invite. Members can then send the ID in the group to join.\n"
+            "👤 <b>Private:</b> Press Start on @DrQuizRobot, then send the ID in the bot chat.\n\n"
+            "<i>This invitation stays open for 15 minutes after the quiz is ready.</i>"
         )
         markup = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(
-                    "✅ ACCEPT",
-                    callback_data=f"arena:accept:{row['session_id']}"
-                ),
-                InlineKeyboardButton(
-                    "❌ REJECT",
-                    callback_data=f"arena:reject:{row['session_id']}"
-                )
-            ]
+                InlineKeyboardButton("✅  ACCEPT", callback_data=f"arena:accept:{row['session_id']}", style="success"),
+                InlineKeyboardButton("✖️  DECLINE", callback_data=f"arena:reject:{row['session_id']}", style="danger"),
+            ],
+            [
+                InlineKeyboardButton("📋  COPY SESSION ID", copy_text=CopyTextButton(text=str(session_code)), style="primary"),
+                InlineKeyboardButton("📥  COPY JOIN COMMAND", copy_text=CopyTextButton(text=f"/accept {session_code}"), style="primary"),
+            ],
         ])
-        result = InlineQueryResultArticle(id="arena_"+token, title="📨 Invite to NEET Quiz", description=f"{row['chapter']} · {row['question_count']} questions", input_message_content=InputTextMessageContent(text), reply_markup=markup)
+        result = InlineQueryResultArticle(
+            id="arena_" + token,
+            title="🎯 NEET Quiz — Invitation",
+            description=f"{row['chapter']} · {row['question_count']} questions · {row['seconds']} sec each",
+            input_message_content=InputTextMessageContent(text, parse_mode="HTML", disable_web_page_preview=True),
+            reply_markup=markup,
+        )
         await update.inline_query.answer([result], cache_time=0, is_personal=True)
         return True
 
@@ -1540,8 +1605,9 @@ The question must be <=280 characters BEFORE the required attribution. Append th
                             explanation=(qdata.get("explanation") or "")[:180],
                             reply_markup=InlineKeyboardMarkup([[
                                 InlineKeyboardButton(
-                                    "📘 Detailed Solution",
+                                    "📘  DETAILED SOLUTION",
                                     callback_data=f"arena:solution:{sid}:{next_index}",
+                                    style="primary",
                                 )
                             ]]),
                         )
@@ -1788,13 +1854,17 @@ The question must be <=280 characters BEFORE the required attribution. Append th
 
             if individual_join:
                 await message.reply_text(
-                    f"✅ You are in the waiting room for this group quiz.\\n"
-                    f"🆔 Session ID: {display_code}\\n"
-                    "You count as a participant after answering at least one quiz question."
+                    "🎉 <b>YOU'RE IN THE WAITING ROOM</b>\n\n"
+                    f"🆔 <b>Session ID</b>  <code>{self._escape(display_code)}</code>\n"
+                    "<i>You become a participant after answering at least one question.</i>",
+                    parse_mode="HTML", reply_markup=self._session_copy_markup(display_code),
                 )
             else:
                 await message.reply_text(
-                    f"✅ Invitation accepted. This chat is registered.\\n🆔 Session ID: {display_code}"
+                    "✅ <b>THIS CHAT IS REGISTERED</b>\n\n"
+                    f"🆔 <b>Session ID</b>  <code>{self._escape(display_code)}</code>\n"
+                    "<i>You're all set. Wait for the host to start the quiz.</i>",
+                    parse_mode="HTML", reply_markup=self._session_copy_markup(display_code),
                 )
         except ValueError as e:
             messages = {
@@ -1863,12 +1933,17 @@ The question must be <=280 characters BEFORE the required attribution. Append th
                     individual_join = False
             if individual_join:
                 await update.effective_message.reply_text(
-                    f"✅ You are in the waiting room.\\n🆔 Session ID: {display_code}\\n"
-                    "You count as a participant after answering at least one quiz question."
+                    "🎉 <b>YOU'RE IN THE WAITING ROOM</b>\n\n"
+                    f"🆔 <b>Session ID</b>  <code>{self._escape(display_code)}</code>\n"
+                    "<i>You become a participant after answering at least one question.</i>",
+                    parse_mode="HTML", reply_markup=self._session_copy_markup(display_code),
                 )
             else:
                 await update.effective_message.reply_text(
-                    f"✅ Invitation accepted. This chat is registered.\\n🆔 Session ID: {display_code}"
+                    "✅ <b>THIS CHAT IS REGISTERED</b>\n\n"
+                    f"🆔 <b>Session ID</b>  <code>{self._escape(display_code)}</code>\n"
+                    "<i>You're all set. Wait for the host to start the quiz.</i>",
+                    parse_mode="HTML", reply_markup=self._session_copy_markup(display_code),
                 )
         except ValueError as e:
             messages = {
@@ -1955,7 +2030,10 @@ The question must be <=280 characters BEFORE the required attribution. Append th
                 user.id,
             )
             if not row:
-                await update.effective_message.reply_text("ℹ️ You have no pending or active AI Quiz Arena session.")
+                await update.effective_message.reply_text(
+                    "ℹ️ <b>NO ACTIVE QUIZ SESSION</b>\nUse /quiz to create a new NEET Quiz Arena session.",
+                    parse_mode="HTML",
+                )
                 return
             counts = await c.fetchrow(
                 """SELECT
@@ -1995,27 +2073,37 @@ The question must be <=280 characters BEFORE the required attribution. Append th
             and cfg.get("session_id") == row["id"]
             and len(questions) == int(row["question_count"])
         ):
-            buttons = [[InlineKeyboardButton("▶️ START QUIZ", callback_data="arena:start")]]
+            buttons = [[InlineKeyboardButton("▶️ START QUIZ", callback_data="arena:start", style="success")]]
             if invite_token:
                 buttons.append([
-                    InlineKeyboardButton("👤 INVITE FRIENDS", switch_inline_query=f"arena_invite_friend_{invite_token}"),
-                    InlineKeyboardButton("👥 INVITE GROUPS", switch_inline_query=f"arena_invite_group_{invite_token}"),
+                    InlineKeyboardButton("👤 INVITE FRIENDS", switch_inline_query=f"arena_invite_friend_{invite_token}", style="primary"),
+                    InlineKeyboardButton("👥 INVITE GROUPS", switch_inline_query=f"arena_invite_group_{invite_token}", style="primary"),
                 ])
             reply_markup = InlineKeyboardMarkup(buttons)
 
         expiry = row["invite_expires_at"]
         expiry_text = expiry.astimezone(timezone.utc).strftime("%H:%M UTC") if expiry else "not set"
+        session_code = row["session_code"] or row["id"]
+        status_buttons = list(reply_markup.inline_keyboard) if reply_markup else []
+        status_buttons.append([
+            InlineKeyboardButton("📋  COPY SESSION ID", copy_text=CopyTextButton(text=str(session_code)), style="primary"),
+            InlineKeyboardButton("📥  COPY JOIN COMMAND", copy_text=CopyTextButton(text=f"/accept {session_code}"), style="primary"),
+        ])
         await update.effective_message.reply_text(
-            f"📊 AI QUIZ ARENA STATUS\\n\\n"
-            f"🆔 {row['session_code'] or row['id']}\\n"
-            f"📖 {row['chapter']}\\n"
-            f"📚 Questions: {row['question_count']}\\n"
-            f"📍 Status: {row['status'].upper()}\\n"
-            f"👤 Private chats: {private_count}/10\\n"
-            f"👥 Groups: {group_count}/5\\n"
-            f"❓ Current question: {max(0, int(row['current_index']) + 1)}"
-            + (f"\\n⌛ Invitation expiry: {expiry_text}" if row["status"] in ("draft","generating","ready") else ""),
-            reply_markup=reply_markup,
+            "📊 <b>QUIZ CONTROL PANEL</b>\n\n"
+            f"<blockquote>🆔 <b>Session ID</b>  <code>{self._escape(session_code)}</code>\n"
+            f"📖 <b>Chapter</b>  {self._escape(row['chapter'])}\n"
+            f"❓ <b>Questions</b>  {row['question_count']}\n"
+            f"📍 <b>Status</b>  {row['status'].upper()}\n"
+            f"👤 <b>Private chats</b>  {private_count}/10\n"
+            f"👥 <b>Groups</b>  {group_count}/5\n"
+            f"🔢 <b>Current question</b>  {max(0, int(row['current_index']) + 1)}"
+            + (f"\n⌛ <b>Invitation closes</b>  {expiry_text}" if row["status"] in ("draft","generating","ready") else "")
+            + "</blockquote>\n"
+            "<i>Use the buttons below to copy the Session ID or join command.</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(status_buttons),
+            disable_web_page_preview=True,
         )
 
     async def stop_command(self, update, context):
@@ -2204,3 +2292,22 @@ The question must be <=280 characters BEFORE the required attribution. Append th
     def _escape(value):
         import html
         return html.escape(str(value or ""))
+
+    @staticmethod
+    def _session_copy_markup(session_code):
+        """Native Telegram copy buttons for the session code and join command."""
+        code = str(session_code or "").strip()
+        if not code:
+            return None
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "📋  COPY SESSION ID",
+                copy_text=CopyTextButton(text=code),
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                "📥  COPY JOIN COMMAND",
+                copy_text=CopyTextButton(text=f"/accept {code}"),
+                style="primary",
+            ),
+        ]])
